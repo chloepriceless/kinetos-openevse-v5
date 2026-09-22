@@ -11,6 +11,9 @@
 #include "evse_man.h"
 
 #define EvseClient_Kinetos_P14a EVC(EvseClient_Vendor_Unregistered, 0x5302)
+// Must outrank the Safety-level max_current claims (current shaper), or their higher cap would
+// replace the dimming limit. A lower cap from them is kept (getMaxCurrentExcluding()).
+#define EvseManager_Priority_P14a 5100
 
 class KinetosP14a : public MicroTasks::Task
 {

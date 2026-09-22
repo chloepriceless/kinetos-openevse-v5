@@ -64,6 +64,17 @@
 	<div class="columns is-centered">
 		<div class="column is-three-quarters is-full-mobile">
 
+			<!-- Detected hardware -->
+			<Borders grow>
+				<div class="has-text-weight-bold mb-2">{$_("config.kinetos.hardware")}</div>
+				<div class="columns is-multiline is-mobile is-size-7">
+					<div class="column is-half">{$_("config.kinetos.hw-meter")}: <b>{$status_store.mid_valid ? $_("config.kinetos.hw-detected") : ($status_store.mid_present === false ? $_("config.kinetos.hw-none") : "…")}</b></div>
+					<div class="column is-half">{$_("config.kinetos.hw-rfid")}: <b>{!$config_store.rfid_enabled ? $_("disabled") : ($status_store.rfid_failure ? $_("config.kinetos.hw-noanswer") : $_("config.kinetos.hw-detected"))}</b></div>
+					<div class="column is-half">{$_("config.kinetos.hw-maxcurrent")}: <b>{$config_store.max_current_hard} A</b></div>
+					<div class="column is-half">{$_("config.kinetos.hw-power")}: <b>{$status_store.mid_valid ? $_("config.kinetos.hw-src-meter") : $_("config.kinetos.hw-src-ct")}</b></div>
+				</div>
+			</Borders>
+
 			<!-- Live MID meter -->
 			<Borders grow>
 				<div class="has-text-weight-bold mb-2">{$_("config.kinetos.live")}</div>

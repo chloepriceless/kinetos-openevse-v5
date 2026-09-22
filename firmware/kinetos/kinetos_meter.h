@@ -45,6 +45,8 @@ class KinetosMeter : public MicroTasks::Task
     uint32_t _sentAt;
     bool _waiting;
     uint32_t _published;
+    uint32_t _lastResponse;
+    bool _absent;
     uint32_t _requests;
     uint32_t _responses;
     uint32_t _errors;
@@ -64,6 +66,8 @@ class KinetosMeter : public MicroTasks::Task
 
     // True when every value was refreshed within the last 10 s
     bool isValid();
+    // false once the meter has not answered for 30 s (box without meter); probed once a minute
+    bool isPresent() { return !_absent; }
     float get(Value v) { return _values[v]; }
     // Number of phases currently carrying more than 1 A
     uint8_t activePhases();

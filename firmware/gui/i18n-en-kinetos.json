@@ -32,5 +32,15 @@
   "teslamate-apply": "Use TeslaMate",
   "diag": "Diagnostics",
   "uptime": "Uptime",
-  "reset": "Last reset reason"
+  "reset": "Last reset reason",
+  "hardware": "Detected hardware",
+  "hw-meter": "MID meter",
+  "hw-detected": "detected",
+  "hw-none": "not fitted",
+  "hw-rfid": "RFID reader",
+  "hw-noanswer": "no answer",
+  "hw-maxcurrent": "Max. current (controller)",
+  "hw-power": "Power source",
+  "hw-src-meter": "MID meter (3 phases)",
+  "hw-src-ct": "controller CT (estimate)"
 }

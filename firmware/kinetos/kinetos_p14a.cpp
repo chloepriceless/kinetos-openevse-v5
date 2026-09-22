@@ -43,7 +43,15 @@ long KinetosP14a::limitAmps()
   }
   long amps = (long)(kinetos_p14a_limit / (P14A_NOMINAL_VOLT * phases));
   long minAmps = _evse->getMinCurrent();
-  return amps < minAmps ? minAmps : amps;
+  if(amps < minAmps) {
+    amps = minAmps;
+  }
+  // Never raise a lower cap set by another claim (e.g. the current shaper)
+  uint32_t other = _evse->getMaxCurrentExcluding(EvseClient_Kinetos_P14a);
+  if(other != UINT32_MAX && (long)other < amps) {
+    amps = other;
+  }
+  return amps;
 }
 
 void KinetosP14a::apply()
@@ -57,7 +65,7 @@ void KinetosP14a::apply()
   if(active) {
     EvseProperties props;
     props.setMaxCurrent(amps);
-    _evse->claim(EvseClient_Kinetos_P14a, EvseManager_Priority_Limit, props);
+    _evse->claim(EvseClient_Kinetos_P14a, EvseManager_Priority_P14a, props);
   } else {
     _evse->release(EvseClient_Kinetos_P14a);
   }

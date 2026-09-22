@@ -229,6 +229,45 @@ index f221cbc6..b942475c 100644
  
      // convert to w/h
      double wh = mws / 3600000;
+diff --git a/src/evse_man.cpp b/src/evse_man.cpp
+index 34c139e1..3e5518fb 100644
+--- a/src/evse_man.cpp
++++ b/src/evse_man.cpp
+@@ -678,3 +678,21 @@ bool EvseManager::serializeTarget(DynamicJsonDocument &doc)
+ 
+   return true;
+ }
++
++// Same selection as evaluateClaims(): the highest-priority claim that sets a max_current wins.
++uint32_t EvseManager::getMaxCurrentExcluding(EvseClient exclude)
++{
++  uint32_t max_current = UINT32_MAX;
++  int priority = 0;
++  for(size_t i = 0; i < EVSE_MANAGER_MAX_CLIENT_CLAIMS; i++)
++  {
++    Claim &claim = _clients[i];
++    if(claim.isValid() && claim.getClient() != exclude &&
++       claim.getPriority() > priority && claim.getMaxCurrent() != UINT32_MAX)
++    {
++      max_current = claim.getMaxCurrent();
++      priority = claim.getPriority();
++    }
++  }
++  return max_current;
++}
+diff --git a/src/evse_man.h b/src/evse_man.h
+index a48b69ca..383d2208 100644
+--- a/src/evse_man.h
++++ b/src/evse_man.h
+@@ -267,6 +267,8 @@ class EvseManager : public MicroTasks::Task
+     bool claim(EvseClient client, int priority, EvseProperties &target);
+     bool release(EvseClient client);
+     bool clientHasClaim(EvseClient client);
++    // The max_current the claims other than `exclude` resolve to, UINT32_MAX if none sets one
++    uint32_t getMaxCurrentExcluding(EvseClient exclude);
+     uint8_t getClaimsVersion();
+ 
+     EvseProperties &getClaimProperties(EvseClient client);
 diff --git a/src/evse_monitor.cpp b/src/evse_monitor.cpp
 index 4488578d..f8ebff3b 100644
 --- a/src/evse_monitor.cpp
@@ -285,7 +324,7 @@ index 849931b8..e2d31fa1 100644
      }
      double getPower() {
 diff --git a/src/input.cpp b/src/input.cpp
-index 976d8970..8283f3f1 100644
+index 976d8970..98702cad 100644
 --- a/src/input.cpp
 +++ b/src/input.cpp
 @@ -8,6 +8,13 @@
@@ -302,7 +341,7 @@ index 976d8970..8283f3f1 100644
  #include "app_config.h"
  #include "divert.h"
  #include "event.h"
-@@ -106,6 +113,53 @@ void create_rapi_json(JsonDocument &doc)
+@@ -106,6 +113,54 @@ void create_rapi_json(JsonDocument &doc)
    doc["voltage"] = evse.getVoltage() * VOLTS_SCALE_FACTOR;
    doc["power"] = evse.getPower() * POWER_SCALE_FACTOR;
    doc["pilot"] = evse.getChargeCurrent();
@@ -321,6 +360,7 @@ index 976d8970..8283f3f1 100644
 +    doc["mid_total_kwh"] = kinetosMeter.get(KinetosMeter::TotalEnergy);
 +  }
 +  doc["mid_valid"] = kinetosMeter.isValid();
++  doc["mid_present"] = kinetosMeter.isPresent();
 +  doc["p14a_active"] = kinetosP14a.isActive();
 +  doc["p14a_source"] = (int)kinetosP14a.getSource();
 +  doc["p14a_limit_a"] = kinetosP14a.getLimitAmps();

@@ -174,7 +174,7 @@ Neue Konfigurationsschlüssel (`/config`):
 | `p14a_enabled` | aus | §14a-Steuerung |
 | `p14a_pin` | 14 | Eingang (14, 15, 255 = keiner) |
 | `p14a_active_high` | aus | aus: Kontakt gegen GND (Pull-up) · an: 3,3 V |
-| `p14a_limit` | 4200 | Leistungsgrenze [W] |
+| `p14a_limit` | 4200 | Leistungsgrenze [W] (Claim-Priorität 5100, übernimmt eine niedrigere fremde Grenze) |
 | `led_pv_enabled` | an | LED-Farbe nach PV-Anteil |
 | `led_fx_charge` | 3 | WS2812FX-Modus beim Laden |
 | `ha_discovery_enabled` | an | Home-Assistant-Discovery |
@@ -187,4 +187,4 @@ Zusätzliche `/status`-Felder: `amp2`, `amp3` (A), `voltage2`, `voltage3`, `powe
 MQTT (unter `<mqtt_topic>`): `p14a/set` (`1`/`0`) sowie die Werte pro Phase alle 10 s.
 Home Assistant: `homeassistant/<component>/kinetos_<id>/<key>/config`.
 HTTP: `POST /kinetos/p14a` (`1`/`0`).
-EVSE-Claims: smart1 `0xFFFE5301` (Priorität 500), §14a `0xFFFE5302` (Priorität 1100, `max_current`).
+EVSE-Claims: smart1 `0xFFFE5301` (Priorität 500), §14a `0xFFFE5302` (Priorität 5100, `max_current`).

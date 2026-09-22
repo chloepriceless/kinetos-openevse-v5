@@ -10,6 +10,8 @@
 #define KINETOS_METER_GAP         20    // ms between requests
 #define KINETOS_METER_VALID_AGE   10000 // ms a value stays valid
 #define KINETOS_METER_PUBLISH     10000 // ms between MQTT/websocket updates
+#define KINETOS_METER_ABSENT_AFTER 30000 // ms without any answer -> no meter fitted
+#define KINETOS_METER_PROBE       60000 // ms between probes while absent
 
 // SDM630 input registers, same order as the Kinetos table at 0x3ffbdb68
 const uint16_t KinetosMeter::_registers[KinetosMeter::ValueCount] = {
@@ -28,6 +30,8 @@ KinetosMeter::KinetosMeter() :
   _sentAt(0),
   _waiting(false),
   _published(0),
+  _lastResponse(0),
+  _absent(false),
   _requests(0),
   _responses(0),
   _errors(0)
@@ -45,6 +49,7 @@ void KinetosMeter::begin()
 
 void KinetosMeter::setup()
 {
+  _lastResponse = millis();
   KINETOS_METER_SERIAL.begin(KINETOS_METER_BAUD, SERIAL_8N1, KINETOS_METER_RX, KINETOS_METER_TX);
 }
 
@@ -110,6 +115,8 @@ bool KinetosMeter::handleResponse()
     _values[_index] = value;
     _updated[_index] = millis();
     _responses++;
+    _lastResponse = millis();
+    _absent = false;
   }
   return true;
 }
@@ -126,6 +133,14 @@ unsigned long KinetosMeter::loop(MicroTasks::WakeReason reason)
       _errors++;
     }
     _waiting = false;
+    if(!_absent && millis() - _lastResponse >= KINETOS_METER_ABSENT_AFTER) {
+      DBUGLN("KinetosMeter: no answer, assuming no meter fitted");
+      _absent = true;
+    }
+    if(_absent) {
+      _index = 0;
+      return KINETOS_METER_PROBE;
+    }
     _index = (_index + 1) % ValueCount;
     if(0 == _index && isValid() && millis() - _published >= KINETOS_METER_PUBLISH) {
       publish();
