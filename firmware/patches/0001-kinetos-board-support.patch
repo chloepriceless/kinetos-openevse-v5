@@ -1,0 +1,528 @@
+diff --git a/platformio.ini b/platformio.ini
+index 23e839a8..c44f3f52 100644
+--- a/platformio.ini
++++ b/platformio.ini
+@@ -518,3 +518,37 @@ build_flags =
+ #upload_protocol = custom
+ #upload_command = curl -F firmware=@$SOURCE http://$UPLOAD_PORT/update
+ build_type = debug
++
++[env:wt32-eth01-kinetos-mid]
++# Kinetos / Bond Electronics EV-CC-AC3-LM-RCM-LAN-WIFI-LCD-LED-NFC-MID (WT32-ETH01)
++# Pins reverse engineered from Kinetos firmware 4.1.4, see kinetos-openevse docs/PAPER.md
++board = wt32-eth01
++lib_deps =
++  ${common.lib_deps}
++  ${common.neopixel_lib}
++  ${common.ws2812fx_lib}
++build_flags =
++  ${common.build_flags}
++  ${common.src_build_flags}
++  -D KINETOS_BOARD
++  -D KINETOS_NO_DEBUG_UART
++  -D KINETOS_BUTTON_DISABLED
++  -D KINETOS_NO_TESLA
++  -Wl,--wrap=esp_panic_handler
++  -D RAPI_PORT=Serial
++  -D NEO_PIXEL_PIN=4
++  -D NEO_PIXEL_LENGTH=7
++  -D ENABLE_WS2812FX
++  -D WIFI_PIXEL_NUMBER=1
++  -D I2C_SDA=33
++  -D I2C_SCL=32
++  -D ENABLE_PN532
++  -D ENABLE_WIRED_ETHERNET
++  -D RESET_ETH_PHY_ON_BOOT=1
++  -D ETH_PHY_TYPE=ETH_PHY_LAN8720
++  -D ETH_PHY_ADDR=1
++  -D ETH_PHY_MDC=23
++  -D ETH_PHY_MDIO=18
++  -D ETH_CLK_MODE=ETH_CLOCK_GPIO0_IN
++  -D ETH_PHY_POWER=16
++board_build.partitions = ${common.build_partitions}
+diff --git a/src/LedManagerTask.cpp b/src/LedManagerTask.cpp
+index cbc742d7..b863a531 100644
+--- a/src/LedManagerTask.cpp
++++ b/src/LedManagerTask.cpp
+@@ -29,6 +29,9 @@
+ #include "debug.h"
+ #include "emonesp.h"
+ #include "LedManagerTask.h"
++#ifdef KINETOS_BOARD
++#include "kinetos_led.h"
++#endif
+ 
+ #if defined(NEO_PIXEL_PIN) && defined(NEO_PIXEL_LENGTH) && !defined(ENABLE_WS2812FX)
+ #include <Adafruit_NeoPixel.h>
+@@ -307,6 +310,13 @@ unsigned long LedManagerTask::loop(MicroTasks::WakeReason reason)
+           isCharging = _evse->isCharging();
+           isError = _evse->isError();
+           if(isCharging){
++#ifdef KINETOS_BOARD
++            uint8_t fxMode = FX_MODE_COLOR_WIPE;
++            if(kinetos_led_charging(col, fxMode, speed)) {
++              setAllRGB(col, fxMode, speed);
++              return 5000; // re-evaluate the PV share
++            }
++#endif
+             setAllRGB(col, FX_MODE_COLOR_WIPE, speed);
+           } else if(isError){
+             setAllRGB(col, FX_MODE_FADE, DEFAULT_FX_SPEED);
+diff --git a/src/app_config.cpp b/src/app_config.cpp
+index 2f415bc4..c9e9d90d 100644
+--- a/src/app_config.cpp
++++ b/src/app_config.cpp
+@@ -117,6 +117,11 @@ String tesla_vehicle_id;
+ // Vehicle
+ uint8_t vehicle_data_src;
+ 
++// Kinetos board
++uint8_t kinetos_p14a_pin;
++uint32_t kinetos_p14a_limit;
++uint8_t kinetos_led_fx_charge;
++
+ #if RGB_LED
+ uint8_t led_brightness;
+ #endif
+@@ -137,10 +142,17 @@ void config_changed(String name);
+ #define CONFIG_DEFAULT_STATE_DEFAULT CONFIG_DEFAULT_STATE
+ #endif
+ 
++#ifdef KINETOS_BOARD
++#define CONFIG_KINETOS_SMART1_DEFAULT (CONFIG_KINETOS_SMART1 | CONFIG_KINETOS_LED_PV | CONFIG_KINETOS_HA)
++#else
++#define CONFIG_KINETOS_SMART1_DEFAULT 0
++#endif
++
+ #define CONFIG_DEFAULT_FLAGS (CONFIG_SERVICE_SNTP | \
+                               CONFIG_OCPP_AUTO_AUTH | \
+                               CONFIG_OCPP_OFFLINE_AUTH | \
+-                              CONFIG_DEFAULT_STATE_DEFAULT)
++                              CONFIG_DEFAULT_STATE_DEFAULT | \
++                              CONFIG_KINETOS_SMART1_DEFAULT)
+ 
+ ConfigOptDefinition<uint32_t> flagsOpt = ConfigOptDefinition<uint32_t>(flags, CONFIG_DEFAULT_FLAGS, "flags", "f");
+ ConfigOptDefinition<uint32_t> flagsChanged = ConfigOptDefinition<uint32_t>(flags_changed, 0, "flags_changed", "c");
+@@ -218,6 +230,9 @@ ConfigOpt *opts[] =
+ 
+ // Vehicle settings
+   new ConfigOptDefinition<uint8_t>(vehicle_data_src, 0, "vehicle_data_src", "vds"),
++  new ConfigOptDefinition<uint8_t>(kinetos_p14a_pin, 14, "p14a_pin", "p4p"),
++  new ConfigOptDefinition<uint32_t>(kinetos_p14a_limit, 4200, "p14a_limit", "p4l"),
++  new ConfigOptDefinition<uint8_t>(kinetos_led_fx_charge, 3, "led_fx_charge", "lfx"),
+ 
+ // Tesla client settings
+   new ConfigOptSecret(tesla_access_token, "", "tesla_access_token", "tat"),
+@@ -261,6 +276,11 @@ ConfigOpt *opts[] =
+   new ConfigOptVirtualMaskedBool(flagsOpt, flagsChanged, CONFIG_RFID, CONFIG_RFID, "rfid_enabled", "rf"),
+   new ConfigOptVirtualMaskedBool(flagsOpt, flagsChanged, CONFIG_FACTORY_WRITE_LOCK, CONFIG_FACTORY_WRITE_LOCK, "factory_write_lock", "fwl"),
+   new ConfigOptVirtualMaskedBool(flagsOpt, flagsChanged, CONFIG_THREEPHASE, CONFIG_THREEPHASE, "is_threephase", "itp"),
++  new ConfigOptVirtualMaskedBool(flagsOpt, flagsChanged, CONFIG_KINETOS_SMART1, CONFIG_KINETOS_SMART1, "smart1_enabled", "s1"),
++  new ConfigOptVirtualMaskedBool(flagsOpt, flagsChanged, CONFIG_KINETOS_P14A, CONFIG_KINETOS_P14A, "p14a_enabled", "p4e"),
++  new ConfigOptVirtualMaskedBool(flagsOpt, flagsChanged, CONFIG_KINETOS_P14A_HIGH, CONFIG_KINETOS_P14A_HIGH, "p14a_active_high", "p4h"),
++  new ConfigOptVirtualMaskedBool(flagsOpt, flagsChanged, CONFIG_KINETOS_LED_PV, CONFIG_KINETOS_LED_PV, "led_pv_enabled", "lpv"),
++  new ConfigOptVirtualMaskedBool(flagsOpt, flagsChanged, CONFIG_KINETOS_HA, CONFIG_KINETOS_HA, "ha_discovery_enabled", "had"),
+   new ConfigOptVirtualMaskedBool(flagsOpt, flagsChanged, CONFIG_WIZARD, CONFIG_WIZARD, "wizard_passed", "wzp"),
+   new ConfigOptVirtualMaskedBool(flagsOpt, flagsChanged, CONFIG_DEFAULT_STATE, CONFIG_DEFAULT_STATE, "default_state", "dfs"),
+   new ConfigOptVirtualMqttProtocol(flagsOpt, flagsChanged, "mqtt_protocol", "mprt"),
+diff --git a/src/app_config.h b/src/app_config.h
+index 1209596c..984d9ce4 100644
+--- a/src/app_config.h
++++ b/src/app_config.h
+@@ -129,6 +129,11 @@ extern uint32_t flags;
+ #define CONFIG_THREEPHASE           (1 << 24)
+ #define CONFIG_WIZARD               (1 << 25)
+ #define CONFIG_DEFAULT_STATE        (1 << 26)
++#define CONFIG_KINETOS_LED_PV       (1 << 27)
++#define CONFIG_KINETOS_SMART1       (1 << 28)
++#define CONFIG_KINETOS_P14A         (1 << 29)
++#define CONFIG_KINETOS_P14A_HIGH    (1 << 30)
++#define CONFIG_KINETOS_HA           (1U << 31)
+ 
+ #define INITIAL_CONFIG_VERSION  1
+ 
+@@ -208,6 +213,30 @@ inline bool config_factory_write_lock() {
+   return CONFIG_FACTORY_WRITE_LOCK == (flags & CONFIG_FACTORY_WRITE_LOCK);
+ }
+ 
++extern uint8_t kinetos_p14a_pin;
++extern uint32_t kinetos_p14a_limit;
++extern uint8_t kinetos_led_fx_charge;
++
++inline bool config_kinetos_led_pv_enabled() {
++  return CONFIG_KINETOS_LED_PV == (flags & CONFIG_KINETOS_LED_PV);
++}
++
++inline bool config_kinetos_p14a_enabled() {
++  return CONFIG_KINETOS_P14A == (flags & CONFIG_KINETOS_P14A);
++}
++
++inline bool config_kinetos_p14a_active_high() {
++  return CONFIG_KINETOS_P14A_HIGH == (flags & CONFIG_KINETOS_P14A_HIGH);
++}
++
++inline bool config_kinetos_ha_enabled() {
++  return CONFIG_KINETOS_HA == (flags & CONFIG_KINETOS_HA);
++}
++
++inline bool config_kinetos_smart1_enabled() {
++  return CONFIG_KINETOS_SMART1 == (flags & CONFIG_KINETOS_SMART1);
++}
++
+ inline bool config_threephase_enabled() {
+   return CONFIG_THREEPHASE == (flags & CONFIG_THREEPHASE);
+ }
+diff --git a/src/debug.cpp b/src/debug.cpp
+index 803f617e..43aafa27 100644
+--- a/src/debug.cpp
++++ b/src/debug.cpp
+@@ -24,6 +24,25 @@
+ #endif
+ #endif
+ 
++#ifdef KINETOS_NO_DEBUG_UART
++// UART0 is wired to the EVSE controller and the other UARTs are taken, so debug output only
++// goes to the web console buffer (StreamSpy), never to a pin.
++class NullSerial : public Stream
++{
++  public:
++    void begin(unsigned long) {}
++    int available() { return 0; }
++    int read() { return -1; }
++    int peek() { return -1; }
++    void flush() {}
++    size_t write(uint8_t) { return 1; }
++    size_t write(const uint8_t *, size_t size) { return size; }
++};
++static NullSerial NullDebugPort;
++#undef DEBUG_PORT
++#define DEBUG_PORT NullDebugPort
++#endif
++
+ StreamSpy SerialDebug(DEBUG_PORT);
+ StreamSpy SerialEvse(RAPI_PORT);
+ 
+diff --git a/src/energy_meter.cpp b/src/energy_meter.cpp
+index f221cbc6..b942475c 100644
+--- a/src/energy_meter.cpp
++++ b/src/energy_meter.cpp
+@@ -5,6 +5,9 @@
+ #include <sys/time.h>
+ 
+ #include "energy_meter.h"
++#ifdef KINETOS_BOARD
++#include "kinetos_meter.h"
++#endif
+ #include "evse_monitor.h"
+ 
+ #include "debug.h"
+@@ -241,6 +244,12 @@ bool EnergyMeter::update()
+       // Multiply calculation by 3 to get 3-phase energy.
+       mws *= 3;
+     }
++#ifdef KINETOS_BOARD
++    if (kinetosMeter.isValid())
++    {
++      mws = kinetosMeter.get(KinetosMeter::PowerTotal) * dms;
++    }
++#endif
+ 
+     // convert to w/h
+     double wh = mws / 3600000;
+diff --git a/src/evse_monitor.cpp b/src/evse_monitor.cpp
+index 4488578d..f8ebff3b 100644
+--- a/src/evse_monitor.cpp
++++ b/src/evse_monitor.cpp
+@@ -6,6 +6,9 @@
+ 
+ #include "emonesp.h"
+ #include "evse_monitor.h"
++#ifdef KINETOS_BOARD
++#include "kinetos_meter.h"
++#endif
+ #include "event.h"
+ #include "debug.h"
+ 
+@@ -765,6 +768,13 @@ void EvseMonitor::getChargeCurrentAndVoltageFromEvse()
+         if (config_threephase_enabled()) {
+           _power = _power * 3;
+         }
++#ifdef KINETOS_BOARD
++        if(kinetosMeter.isValid()) {
++          _amp = kinetosMeter.get(KinetosMeter::CurrentL1);
++          _voltage = kinetosMeter.get(KinetosMeter::VoltageL1);
++          _power = kinetosMeter.get(KinetosMeter::PowerTotal);
++        }
++#endif
+ 
+         StaticJsonDocument<64> event;
+         event["amp"] = _amp * AMPS_SCALE_FACTOR;;
+diff --git a/src/evse_monitor.h b/src/evse_monitor.h
+index 849931b8..e2d31fa1 100644
+--- a/src/evse_monitor.h
++++ b/src/evse_monitor.h
+@@ -5,6 +5,9 @@
+ #include <openevse.h>
+ #include <MicroTasks.h>
+ #include "energy_meter.h"
++#ifdef KINETOS_BOARD
++#include "kinetos_meter.h"
++#endif
+ 
+ #ifdef ENABLE_MCP9808
+ #include <Wire.h>
+@@ -243,6 +246,12 @@ class EvseMonitor : public MicroTasks::Task
+       return _amp;
+     }
+     double getVoltage() {
++#ifdef KINETOS_BOARD
++      // The controller only knows its configured default voltage; the MID meter measures it
++      if(kinetosMeter.isValid()) {
++        return kinetosMeter.get(KinetosMeter::VoltageL1);
++      }
++#endif
+       return _voltage;
+     }
+     double getPower() {
+diff --git a/src/input.cpp b/src/input.cpp
+index 976d8970..8283f3f1 100644
+--- a/src/input.cpp
++++ b/src/input.cpp
+@@ -8,6 +8,13 @@
+ 
+ #include "emonesp.h"
+ #include "input.h"
++#ifdef KINETOS_BOARD
++#include "kinetos_meter.h"
++#include <esp_system.h>
++#include "kinetos_crash.h"
++#include "kinetos_p14a.h"
++#include "kinetos_led.h"
++#endif
+ #include "app_config.h"
+ #include "divert.h"
+ #include "event.h"
+@@ -106,6 +113,53 @@ void create_rapi_json(JsonDocument &doc)
+   doc["voltage"] = evse.getVoltage() * VOLTS_SCALE_FACTOR;
+   doc["power"] = evse.getPower() * POWER_SCALE_FACTOR;
+   doc["pilot"] = evse.getChargeCurrent();
++#ifdef KINETOS_BOARD
++  if(kinetosMeter.isValid()) {
++    doc["amp"] = kinetosMeter.get(KinetosMeter::CurrentL1) * AMPS_SCALE_FACTOR;
++    doc["voltage"] = kinetosMeter.get(KinetosMeter::VoltageL1) * VOLTS_SCALE_FACTOR;
++    doc["power"] = kinetosMeter.get(KinetosMeter::PowerTotal) * POWER_SCALE_FACTOR;
++    doc["amp2"] = kinetosMeter.get(KinetosMeter::CurrentL2) * AMPS_SCALE_FACTOR;
++    doc["amp3"] = kinetosMeter.get(KinetosMeter::CurrentL3) * AMPS_SCALE_FACTOR;
++    doc["voltage2"] = kinetosMeter.get(KinetosMeter::VoltageL2);
++    doc["voltage3"] = kinetosMeter.get(KinetosMeter::VoltageL3);
++    doc["powersum"] = kinetosMeter.get(KinetosMeter::PowerTotal);
++    doc["phases"] = kinetosMeter.activePhases();
++    doc["mid_import_kwh"] = kinetosMeter.get(KinetosMeter::ImportEnergy);
++    doc["mid_total_kwh"] = kinetosMeter.get(KinetosMeter::TotalEnergy);
++  }
++  doc["mid_valid"] = kinetosMeter.isValid();
++  doc["p14a_active"] = kinetosP14a.isActive();
++  doc["p14a_source"] = (int)kinetosP14a.getSource();
++  doc["p14a_limit_a"] = kinetosP14a.getLimitAmps();
++  doc["p14a_input"] = kinetosP14a.getInputRaw();
++  doc["pv_share"] = kinetos_pv_share();
++  doc["reset_reason"] = (int)esp_reset_reason();
++  doc["gpio14"] = digitalRead(14);
++  doc["gpio15"] = digitalRead(15);
++  doc["gpio39"] = digitalRead(39);
++  const KinetosCrash *crash = kinetos_last_crash();
++  if(crash) {
++    JsonObject p = doc.createNestedObject("last_panic");
++    p["core"] = crash->core;
++    p["exception"] = crash->exception;
++    p["reason"] = crash->reason;
++    p["description"] = crash->description;
++    char buf[16];
++    snprintf(buf, sizeof(buf), "0x%08x", crash->pc); p["pc"] = String(buf);
++    p["exccause"] = crash->exccause;
++    snprintf(buf, sizeof(buf), "0x%08x", crash->excvaddr); p["excvaddr"] = String(buf);
++    String bt;
++    for(uint32_t i = 0; i < crash->depth; i++) {
++      snprintf(buf, sizeof(buf), "0x%08x ", crash->backtrace[i]);
++      bt += buf;
++    }
++    p["backtrace"] = bt;
++  }
++  doc["uptime_ms"] = millis();
++  doc["mid_requests"] = kinetosMeter.getRequests();
++  doc["mid_responses"] = kinetosMeter.getResponses();
++  doc["mid_errors"] = kinetosMeter.getErrors();
++#endif
+   doc["max_current"] = evse.getMaxCurrent();
+   if(evse.isTemperatureValid(EVSE_MONITOR_TEMP_MONITOR)) {
+     doc["temp"] = evse.getTemperature(EVSE_MONITOR_TEMP_MONITOR) * TEMP_SCALE_FACTOR;
+diff --git a/src/main.cpp b/src/main.cpp
+index d7138398..ab005bcd 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -64,6 +64,13 @@
+ 
+ #include "legacy_support.h"
+ #include "certificates.h"
++#ifdef KINETOS_BOARD
++#include "kinetos_meter.h"
++#include "kinetos_smart1.h"
++#include "kinetos_p14a.h"
++#include "kinetos_crash.h"
++#include <esp_system.h>
++#endif
+ 
+ EventLog eventLog;
+ CertificateStore certs;
+@@ -188,6 +195,21 @@ void setup()
+   DBUGF("After ocpp.begin: %d", ESPAL.getFreeHeap());
+ 
+   shaper.begin(evse);
++
++#ifdef KINETOS_BOARD
++  // A panic record is only meaningful right after the panic reboot
++  if(ESP_RST_PANIC != esp_reset_reason()) {
++    kinetos_clear_crash();
++  }
++
++  // Probe inputs only (no pull-ups): button candidate GPIO39, free terminals IO14/IO15 (§14a)
++  pinMode(14, INPUT);
++  pinMode(15, INPUT);
++  pinMode(39, INPUT);
++  kinetosMeter.begin();
++  kinetosSmart1.begin(evse);
++  kinetosP14a.begin(evse);
++#endif
+   DBUGF("After shaper.begin: %d", ESPAL.getFreeHeap());
+ 
+   lcd.display(F("OpenEVSE WiFI"), 0, 0, 0, LCD_CLEAR_LINE);
+@@ -236,7 +258,9 @@ loop() {
+   if(net.isConnected())
+   {
+     if (vehicle_data_src == VEHICLE_DATA_SRC_TESLA) {
++#ifndef KINETOS_NO_TESLA
+       teslaClient.loop();
++#endif
+     }
+ 
+     // -------------------------------------------------------------------
+diff --git a/src/mqtt.cpp b/src/mqtt.cpp
+index 5025308b..e748aa68 100644
+--- a/src/mqtt.cpp
++++ b/src/mqtt.cpp
+@@ -3,6 +3,11 @@
+ #endif
+ 
+ #include "mqtt.h"
++#ifdef KINETOS_BOARD
++#include "kinetos_ha.h"
++#include "kinetos_p14a.h"
++#include "kinetos_led.h"
++#endif
+ #include "app_config.h"
+ #include "openevse.h"
+ #include "divert.h"
+@@ -172,6 +177,12 @@ void Mqtt::onMqttConnect() {
+   event_send(doc);
+ 
+   subscribeTopics();
++#ifdef KINETOS_BOARD
++  kinetos_ha_discovery([this](const String &topic, const String &payload, bool retain) {
++    String t = topic, p = payload;
++    _mqttclient.publish(t, p, retain);
++  });
++#endif
+   publishInitialState(); // Publish current states like config, claims, etc.
+ }
+ 
+@@ -216,6 +227,9 @@ void Mqtt::subscribeTopics() {
+   if (mqtt_vehicle_soc != "") { _mqttclient.subscribe(mqtt_vehicle_soc); yield(); }
+   if (mqtt_vehicle_range != "") { _mqttclient.subscribe(mqtt_vehicle_range); yield(); }
+   if (mqtt_vehicle_eta != "") { _mqttclient.subscribe(mqtt_vehicle_eta); yield(); }
++#ifdef KINETOS_BOARD
++  _mqttclient.subscribe(mqtt_topic + "/p14a/set"); yield();
++#endif
+   if (mqtt_vrms != "") { _mqttclient.subscribe(mqtt_vrms); yield(); }
+ 
+   // Settable topics
+@@ -289,6 +303,9 @@ void Mqtt::handleMqttMessage(MongooseString topic, MongooseString payload) {
+   // Logic from old mqttmsg_callback
+   if (topic_string == mqtt_solar){
+     solar = payload_str.toInt();
++#ifdef KINETOS_BOARD
++    kinetos_pv_feed_seen();
++#endif
+     DBUGF("solar:%dW", solar);
+     divert.update_state();
+     if (shaper.getState()) {
+@@ -297,6 +314,9 @@ void Mqtt::handleMqttMessage(MongooseString topic, MongooseString payload) {
+   }
+   else if (topic_string == mqtt_grid_ie) {
+     grid_ie = payload_str.toInt();
++#ifdef KINETOS_BOARD
++    kinetos_pv_feed_seen();
++#endif
+     DBUGF("grid:%dW", grid_ie);
+     divert.update_state();
+     if (mqtt_live_pwr == mqtt_grid_ie) {
+@@ -324,9 +344,20 @@ void Mqtt::handleMqttMessage(MongooseString topic, MongooseString payload) {
+   }
+   else if (topic_string == mqtt_vehicle_eta && vehicle_data_src == VEHICLE_DATA_SRC_MQTT) {
+     int vehicle_eta = payload_str.toInt();
++#ifdef KINETOS_BOARD
++    // TeslaMate publishes time_to_full_charge in hours (e.g. "1.25")
++    if (topic_string.endsWith("time_to_full_charge")) {
++      vehicle_eta = (int)(payload_str.toFloat() * 3600);
++    }
++#endif
+     _evse->setVehicleEta(vehicle_eta);
+     StaticJsonDocument<128> event; event["time_to_full_charge"] = vehicle_eta; event_send(event);
+   }
++#ifdef KINETOS_BOARD
++  else if (topic_string == mqtt_topic + "/p14a/set") {
++    kinetosP14a.setRemote(payload_str == "1" || payload_str.equalsIgnoreCase("on") || payload_str.equalsIgnoreCase("true"));
++  }
++#endif
+   else if (topic_string == mqtt_topic + "/divertmode/set") {
+     byte newdivert = payload_str.toInt();
+     if ((newdivert==1) || (newdivert==2)) {
+diff --git a/src/net_manager.cpp b/src/net_manager.cpp
+index 68a41284..ad96d22c 100644
+--- a/src/net_manager.cpp
++++ b/src/net_manager.cpp
+@@ -589,6 +589,11 @@ unsigned long NetManagerTask::handleMessage()
+ 
+ unsigned long NetManagerTask::serviceButton()
+ {
++#ifdef KINETOS_BUTTON_DISABLED
++  // Default WIFI_BUTTON is GPIO0, the WT32-ETH01 RMII clock input: reading it floods the LCD
++  // queue (out of memory) and can trigger a factory reset. Disabled until the pin is verified.
++  return MicroTask.Infinate;
++#endif
+   int button = _led.getButtonPressed();
+ 
+   //DBUGF("%lu %d %d", millis() - _wifiButtonTimeOut, button, _wifiButtonState);
+diff --git a/src/web_server.cpp b/src/web_server.cpp
+index f241002b..d1f4d044 100644
+--- a/src/web_server.cpp
++++ b/src/web_server.cpp
+@@ -26,6 +26,9 @@ typedef const __FlashStringHelper *fstr_t;
+ 
+ #include "emonesp.h"
+ #include "web_server.h"
++#ifdef KINETOS_BOARD
++#include "kinetos_web.h"
++#endif
+ #include "web_server_static.h"
+ #include "app_config.h"
+ #include "net_manager.h"
+@@ -1200,6 +1203,9 @@ void web_server_setup()
+   }
+ 
+   // Handle status updates
++#ifdef KINETOS_BOARD
++  kinetos_web_register(server);
++#endif
+   server.on("/status$", handleStatus);
+   server.on("/config$", handleConfig);
+ 
