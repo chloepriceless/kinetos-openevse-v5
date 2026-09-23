@@ -583,20 +583,35 @@ index 1b50a943..3afb045f 100644
 +  -D KINETOS_EXTRAS
 +  -Wl,--wrap=esp_panic_handler
 diff --git a/src/LedManagerTask.cpp b/src/LedManagerTask.cpp
-index 33f3a774..ef7c568b 100644
+index 33f3a774..37bb9504 100644
 --- a/src/LedManagerTask.cpp
 +++ b/src/LedManagerTask.cpp
-@@ -29,6 +29,9 @@
+@@ -29,6 +29,11 @@
  #include "debug.h"
  #include "emonesp.h"
  #include "LedManagerTask.h"
 +#ifdef KINETOS_EXTRAS
 +#include "kinetos/kinetos_led.h"
++#else
++#define kinetos_night_brightness(b) (b)
 +#endif
  
  #if defined(NEO_PIXEL_PIN) && defined(NEO_PIXEL_LENGTH) && !defined(ENABLE_WS2812FX)
  #include <Adafruit_NeoPixel.h>
-@@ -326,6 +329,13 @@ unsigned long LedManagerTask::loop(MicroTasks::WakeReason reason)
+@@ -315,10 +320,10 @@ unsigned long LedManagerTask::loop(MicroTasks::WakeReason reason)
+       DBUGF("ChargeCurrent: %d ", _evse->getChargeCurrent());
+       DBUGF("MaxHWCurrent: %d ", _evse->getMaxHardwareCurrent());
+       if (this->brightness == 0){
+-        ws2812fx.setBrightness(255);
++        ws2812fx.setBrightness(kinetos_night_brightness(255));
+       }
+       else {
+-        ws2812fx.setBrightness(this->brightness-1);
++        ws2812fx.setBrightness(kinetos_night_brightness(this->brightness-1));
+       }
+       switch(state)
+       {
+@@ -326,6 +331,13 @@ unsigned long LedManagerTask::loop(MicroTasks::WakeReason reason)
            isCharging = _evse->isCharging();
            isError = _evse->isError();
            if(isCharging){
@@ -610,8 +625,20 @@ index 33f3a774..ef7c568b 100644
              setAllRGB(col, FX_MODE_COLOR_WIPE, speed);
            } else if(isError){
              setAllRGB(col, FX_MODE_FADE, DEFAULT_FX_SPEED);
+@@ -333,7 +345,11 @@ unsigned long LedManagerTask::loop(MicroTasks::WakeReason reason)
+             setAllRGB(col, FX_MODE_STATIC, DEFAULT_FX_SPEED);
+           }    
+           //DBUGF("MODE:  LedState_Evse_State\n");
++#ifdef KINETOS_EXTRAS
++          return 60 * 1000; // pick up the night dimming
++#else
+           return MicroTask.Infinate;
++#endif
+ 
+         case LedState_WiFi_Access_Point_Waiting:
+           setEvseAndWifiRGB(col, FX_MODE_BLINK, CONNECTING_FX_SPEED);
 diff --git a/src/app_config.cpp b/src/app_config.cpp
-index da5c7738..70263ba0 100644
+index da5c7738..4f1b6cfc 100644
 --- a/src/app_config.cpp
 +++ b/src/app_config.cpp
 @@ -11,7 +11,9 @@
@@ -645,7 +672,7 @@ index da5c7738..70263ba0 100644
  // Vehicle
  uint8_t vehicle_data_src;
  
-@@ -194,6 +203,10 @@ String loadsharing_role;
+@@ -194,13 +203,26 @@ String loadsharing_role;
  String loadsharing_controller_host;
  uint32_t loadsharing_rotation_interval;
  
@@ -656,7 +683,41 @@ index da5c7738..70263ba0 100644
  // Advisory acknowledgements: "key:hextoken;" repeated, plus the firmware
  // version that wrote them. A version change drops the lot - a firmware
  // update is a service event, where a power cut is not.
-@@ -321,6 +334,12 @@ ConfigOpt *opts[] =
+ String notification_acks;
+ String notification_acks_fw;
+ 
++#ifdef KINETOS_EXTRAS
++// Kinetos firmware defaults, so a box coming from the original firmware keeps its names
++String esp_hostname_default = "kinetos-"+ESPAL.getShortId();
++#define MQTT_TOPIC_DEFAULT ("kinetos/" + ESPAL.getShortId())
++#define MQTT_ANNOUNCE_PREFIX "kinetos/announce/"
++#else
+ String esp_hostname_default = "openevse-"+ESPAL.getShortId();
++#define MQTT_TOPIC_DEFAULT esp_hostname
++#define MQTT_ANNOUNCE_PREFIX "openevse/announce/"
++#endif
+ 
+ void config_changed(String name);
+ 
+@@ -278,7 +300,7 @@ ConfigOpt *opts[] =
+ // MQTT Settings
+   new ConfigOptDefinition<String>(mqtt_server, "", "mqtt_server", "ms"),
+   new ConfigOptDefinition<uint32_t>(mqtt_port, 1883, "mqtt_port", "mpt"),
+-  new ConfigOptDefinition<String>(mqtt_topic, esp_hostname, "mqtt_topic", "mt"),
++  new ConfigOptDefinition<String>(mqtt_topic, MQTT_TOPIC_DEFAULT, "mqtt_topic", "mt"),
+   new ConfigOptDefinition<String>(mqtt_user, "", "mqtt_user", "mu"),
+   new ConfigOptSecret(mqtt_pass, "", "mqtt_pass", "mp"),
+   new ConfigOptDefinition<String>(mqtt_certificate_id, "", "mqtt_certificate_id", "mct"),
+@@ -292,7 +314,7 @@ ConfigOpt *opts[] =
+   new ConfigOptDefinition<String>(mqtt_vehicle_charge_limit, "", "mqtt_vehicle_charge_limit", "mcl"),
+   new ConfigOptDefinition<String>(mqtt_home_battery_soc, "", "mqtt_home_battery_soc", "mhs"),
+   new ConfigOptDefinition<String>(mqtt_home_battery_power, "", "mqtt_home_battery_power", "mhp"),
+-  new ConfigOptDefinition<String>(mqtt_announce_topic, "openevse/announce/" + ESPAL.getShortId(), "mqtt_announce_topic", "ma"),
++  new ConfigOptDefinition<String>(mqtt_announce_topic, MQTT_ANNOUNCE_PREFIX + ESPAL.getShortId(), "mqtt_announce_topic", "ma"),
+ 
+ // OCPP 1.6 Settings
+   new ConfigOptDefinition<String>(ocpp_server, "", "ocpp_server", "ows"),
+@@ -321,6 +343,12 @@ ConfigOpt *opts[] =
    new ConfigOptDefinition<uint32_t>(heartbeat_interval_cfg, 5, "heartbeat_interval", "hbi"),
    new ConfigOptDefinition<uint32_t>(heartbeat_current_cfg, 6, "heartbeat_current", "hbc"),
  
@@ -669,7 +730,7 @@ index da5c7738..70263ba0 100644
  // Vehicle settings
    new ConfigOptDefinition<uint8_t>(vehicle_data_src, 0, "vehicle_data_src", "vds"),
  
-@@ -355,6 +374,14 @@ ConfigOpt *opts[] =
+@@ -355,6 +383,14 @@ ConfigOpt *opts[] =
    // Rotation interval in seconds (0 disables). Effective max ~49 days on 32-bit millis; larger values wrap.
    new ConfigOptDefinition<uint32_t>(loadsharing_rotation_interval, 1800, "loadsharing_rotation_interval", "lsri"),
  
@@ -684,7 +745,7 @@ index da5c7738..70263ba0 100644
  // Advisory acknowledgements: "key:hextoken;" repeated, plus the firmware
  // version that wrote them. A version change drops the lot - a firmware
  // update is a service event, where a power cut is not.
-@@ -455,6 +482,12 @@ config_load_settings()
+@@ -455,6 +491,12 @@ config_load_settings()
  #endif
    }
  
@@ -697,7 +758,7 @@ index da5c7738..70263ba0 100644
    // Handle setting the newly added flag changed bits
    if(0 == flags_changed)
    {
-@@ -542,8 +575,12 @@ void config_changed(String name)
+@@ -542,8 +584,12 @@ void config_changed(String name)
      }
    } else if(name.startsWith("current_shaper_")) {
      shaper.notifyConfigChanged(config_current_shaper_enabled()?1:0,current_shaper_max_pwr);
@@ -769,6 +830,20 @@ index 8343c6ed..c35343ab 100644
  StreamSpy SerialDebug(DEBUG_PORT);
  StreamSpy SerialEvse(RAPI_PORT);
  
+diff --git a/src/emonesp.h b/src/emonesp.h
+index c42aaa59..ed9edeae 100644
+--- a/src/emonesp.h
++++ b/src/emonesp.h
+@@ -101,6 +101,9 @@
+ #define SNTP_DEFAULT_HOST "time.cloudflare.com"
+ #endif
+ 
++#if defined(KINETOS_EXTRAS) && !defined(DEFAULT_TIME_ZONE)
++#define DEFAULT_TIME_ZONE "Europe/Berlin|CET-1CEST,M3.5.0,M10.5.0/3"
++#endif
+ #ifndef DEFAULT_TIME_ZONE
+ // Default time zone, Europe/London
+ #define DEFAULT_TIME_ZONE "Europe/London|GMT0BST,M3.5.0/1,M10.5.0"
 diff --git a/src/energy_meter.cpp b/src/energy_meter.cpp
 index ae836982..0d24ff16 100644
 --- a/src/energy_meter.cpp
@@ -798,10 +873,22 @@ index ae836982..0d24ff16 100644
      // convert to w/h
      double wh = mws / 3600000;
 diff --git a/src/evse_man.cpp b/src/evse_man.cpp
-index fd67f599..5d532f9f 100644
+index fd67f599..c478b1dc 100644
 --- a/src/evse_man.cpp
 +++ b/src/evse_man.cpp
-@@ -623,6 +623,29 @@ uint32_t EvseManager::getMaxCurrent(EvseClient client)
+@@ -580,7 +580,11 @@ uint8_t EvseManager::getStateColour()
+ 
+     case OPENEVSE_STATE_CHARGING:
+       // TODO: Colour should also take into account the temperature, >60 YELLOW
++      #ifdef KINETOS_EXTRAS
++      return OPENEVSE_LCD_BLUE; // Kinetos shows charging in blue
++#else
+       return OPENEVSE_LCD_TEAL;
++#endif
+ 
+     case OPENEVSE_STATE_VENT_REQUIRED:
+     case OPENEVSE_STATE_DIODE_CHECK_FAILED:
+@@ -623,6 +627,29 @@ uint32_t EvseManager::getMaxCurrent(EvseClient client)
    return getClaimProperties(client).getMaxCurrent();
  }
  
@@ -1427,10 +1514,10 @@ index 00000000..ad62e13a
 +#endif // KINETOS_CRASH_H
 diff --git a/src/kinetos/kinetos_extras.cpp b/src/kinetos/kinetos_extras.cpp
 new file mode 100644
-index 00000000..15634a45
+index 00000000..0662341b
 --- /dev/null
 +++ b/src/kinetos/kinetos_extras.cpp
-@@ -0,0 +1,103 @@
+@@ -0,0 +1,199 @@
 +#ifdef KINETOS_EXTRAS
 +
 +#include <esp_system.h>
@@ -1440,13 +1527,23 @@ index 00000000..15634a45
 +#include "kinetos_led.h"
 +#include "app_config.h"
 +#include "grid_dimming.h"
++#include "sdm_meter.h"
++#include "input.h"
++#include "evse_man.h"
++#include "debug.h"
++#include <MicroTasks.h>
++
++extern EvseManager evse;
 +
 +bool kinetos_led_pv_enabled;
 +uint8_t kinetos_led_fx_charge;
 +bool kinetos_ha_enabled;
++String kinetos_lcd_splash;
 +uint8_t kinetos_config_ver;
 +uint8_t kinetos_legacy_p14a_pin;
 +uint32_t kinetos_legacy_p14a_limit;
++uint32_t kinetos_legacy_charge_count;
++String kinetos_legacy_evse_id;
 +
 +#define KINETOS_CONFIG_VER 2
 +
@@ -1460,6 +1557,14 @@ index 00000000..15634a45
 +#define OLD_MASK      (OLD_LED_PV | OLD_SMART1 | OLD_P14A | OLD_P14A_HIGH | OLD_HA)
 +#define OLD_DEFAULT   (OLD_SMART1 | OLD_LED_PV | OLD_HA)
 +
++// The original Kinetos firmware 4.1.4 (based on OpenEVSE 4.1.5) used bits 21-23 for
++// uLM (0x200000), smart1 (0x400000) and the LED light show (0x800000). Upstream now uses them for
++// factory write lock and OCPP auto/offline authorisation.
++#define STOCK_ULM       (1u << 21)
++#define STOCK_SMART1    (1u << 22)
++#define STOCK_LIGHTSHOW (1u << 23)
++#define STOCK_MASK      (STOCK_ULM | STOCK_SMART1 | STOCK_LIGHTSHOW)
++
 +bool kinetos_config_migrate(uint32_t &flags_changed, uint32_t default_flags)
 +{
 +  if(kinetos_config_ver >= KINETOS_CONFIG_VER) {
@@ -1468,6 +1573,13 @@ index 00000000..15634a45
 +
 +  // Bits never set by the user still had the old default
 +  uint32_t old = ((flags & flags_changed) | (OLD_DEFAULT & ~flags_changed)) & OLD_MASK;
++
++  // Settings straight from the original Kinetos firmware (no flags_changed, Kinetos-only keys)
++  if(0 == flags_changed && (kinetos_legacy_charge_count > 0 || kinetos_legacy_evse_id.length() > 0))
++  {
++    old = (old & ~OLD_SMART1) | ((flags & STOCK_SMART1) ? OLD_SMART1 : 0);
++    flags = (flags & ~STOCK_MASK) | (default_flags & STOCK_MASK);
++  }
 +
 +  kinetos_led_pv_enabled = old & OLD_LED_PV;
 +  kinetos_ha_enabled = old & OLD_HA;
@@ -1487,8 +1599,77 @@ index 00000000..15634a45
 +  return true;
 +}
 +
++// The Kinetos controller (8.x.PR) has no current sensor of its own on MID boxes: the original
++// ESP firmware switched it to external values with "$F2 0" and then fed it the meter's phase
++// currents ("$T0 <mA L1> <mA L2> <mA L3>") and import energy ("$T1 <Wh>"). Without that the
++// controller's own current reading ($GG) and energy counter stay at zero.
++class KinetosControllerFeed : public MicroTasks::Task
++{
++  private:
++    uint8_t _tries = 0;
++    bool _enabled = false;
++    bool _busy = false;
++    uint32_t _lastWh = 0;
++
++  protected:
++    void setup() {}
++
++    unsigned long loop(MicroTasks::WakeReason reason)
++    {
++      if(_busy || !evse.isConnected()) {
++        return 1000;
++      }
++      if(0 != strncmp(evse.getFirmwareVersion(), "8.", 2)) {
++        return 10 * 1000; // only the Kinetos controller knows these commands
++      }
++
++      if(!_enabled)
++      {
++        if(_tries >= 6) {
++          return MicroTask.Infinate;
++        }
++        _tries++;
++        _busy = true;
++        rapiSender.sendCmd("$F2 0", [this](int ret) {
++          _busy = false;
++          _enabled = (RAPI_RESPONSE_OK == ret);
++          DBUGF("kinetos: $F2 0 -> %d", ret);
++        });
++        return 1000;
++      }
++
++      if(!sdmMeter.isValid()) {
++        return 2000;
++      }
++
++      char cmd[48];
++      snprintf(cmd, sizeof(cmd), "$T0 %lu %lu %lu",
++        (unsigned long)(sdmMeter.get(SdmMeter::CurrentL1) * 1000),
++        (unsigned long)(sdmMeter.get(SdmMeter::CurrentL2) * 1000),
++        (unsigned long)(sdmMeter.get(SdmMeter::CurrentL3) * 1000));
++      _busy = true;
++      rapiSender.sendCmd(cmd, [this](int ret) { _busy = false; });
++
++      uint32_t wh = (uint32_t)(sdmMeter.get(SdmMeter::ImportEnergy) * 1000);
++      if(wh != _lastWh)
++      {
++        _lastWh = wh;
++        snprintf(cmd, sizeof(cmd), "$T1 %lu", (unsigned long)wh);
++        rapiSender.sendCmd(cmd, [](int ret) {});
++      }
++      return 2000;
++    }
++
++  public:
++    bool isEnabled() { return _enabled; }
++};
++
++static KinetosControllerFeed controllerFeed;
++
 +void kinetos_begin()
 +{
++  MicroTask.startTask(controllerFeed);
++
 +  // A panic record is only meaningful right after the panic reboot
 +  if(ESP_RST_PANIC != esp_reset_reason()) {
 +    kinetos_clear_crash();
@@ -1506,6 +1687,8 @@ index 00000000..15634a45
 +  doc["dimming_active"] = gridDimming.isActive();
 +  doc["dimming_limit_a"] = gridDimming.getLimitAmps();
 +  doc["pv_share"] = kinetos_pv_share();
++  doc["powersum"] = doc["power"]; // name used by the Kinetos firmware
++  doc["controller_meter_feed"] = controllerFeed.isEnabled();
 +  doc["gpio14"] = digitalRead(14);
 +  doc["gpio15"] = digitalRead(15);
 +  doc["gpio39"] = digitalRead(39);
@@ -1536,10 +1719,10 @@ index 00000000..15634a45
 +#endif // KINETOS_EXTRAS
 diff --git a/src/kinetos/kinetos_extras.h b/src/kinetos/kinetos_extras.h
 new file mode 100644
-index 00000000..2e44c16f
+index 00000000..0ad89224
 --- /dev/null
 +++ b/src/kinetos/kinetos_extras.h
-@@ -0,0 +1,39 @@
+@@ -0,0 +1,45 @@
 +// Kinetos OpenEVSE V5 extras on top of the upstream firmware and the Kinetos board support
 +// (SDM meter, grid dimming, Modbus TCP): PV share on the LED ring, Home Assistant discovery,
 +// panic trap and the migration of settings written by Kinetos V5 up to rev 8 (v5.1.5 based).
@@ -1554,18 +1737,24 @@ index 00000000..2e44c16f
 +extern bool kinetos_led_pv_enabled;
 +extern uint8_t kinetos_led_fx_charge;
 +extern bool kinetos_ha_enabled;
++extern String kinetos_lcd_splash;
 +extern uint8_t kinetos_config_ver;
 +extern uint8_t kinetos_legacy_p14a_pin;
 +extern uint32_t kinetos_legacy_p14a_limit;
++extern uint32_t kinetos_legacy_charge_count;
++extern String kinetos_legacy_evse_id;
 +
 +// Entries for the opts[] table in app_config.cpp
 +#define KINETOS_CONFIG_OPTS \
 +  new ConfigOptDefinition<bool>(kinetos_led_pv_enabled, true, "led_pv_enabled", "lpv"), \
 +  new ConfigOptDefinition<uint8_t>(kinetos_led_fx_charge, 3, "led_fx_charge", "lfx"), \
 +  new ConfigOptDefinition<bool>(kinetos_ha_enabled, true, "ha_discovery_enabled", "had"), \
++  new ConfigOptDefinition<String>(kinetos_lcd_splash, "Kinetos ETH/WiFi", "lcd_splash", "lsp"), \
 +  new ConfigOptDefinition<uint8_t>(kinetos_config_ver, 0, "kinetos_config_ver", "kcv"), \
 +  new ConfigOptDefinition<uint8_t>(kinetos_legacy_p14a_pin, 14, "kinetos_legacy_p14a_pin", "p4p"), \
-+  new ConfigOptDefinition<uint32_t>(kinetos_legacy_p14a_limit, 4200, "kinetos_legacy_p14a_limit", "p4l"),
++  new ConfigOptDefinition<uint32_t>(kinetos_legacy_p14a_limit, 4200, "kinetos_legacy_p14a_limit", "p4l"), \
++  new ConfigOptDefinition<uint32_t>(kinetos_legacy_charge_count, 0, "kinetos_legacy_charge_count", "cc"), \
++  new ConfigOptDefinition<String>(kinetos_legacy_evse_id, "", "kinetos_legacy_evse_id", "ei"),
 +
 +// Call after the user config is loaded, before the default flags are applied.
 +// Returns true if settings were changed and need a commit.
@@ -1779,10 +1968,10 @@ index 00000000..61b384d7
 +#endif // KINETOS_HA_H
 diff --git a/src/kinetos/kinetos_led.cpp b/src/kinetos/kinetos_led.cpp
 new file mode 100644
-index 00000000..a53c6a08
+index 00000000..5afc2c3d
 --- /dev/null
 +++ b/src/kinetos/kinetos_led.cpp
-@@ -0,0 +1,67 @@
+@@ -0,0 +1,81 @@
 +#ifdef KINETOS_EXTRAS
 +
 +#include "kinetos_led.h"
@@ -1849,13 +2038,27 @@ index 00000000..a53c6a08
 +  return true;
 +}
 +
++uint8_t kinetos_night_brightness(uint8_t brightness)
++{
++  time_t now = time(NULL);
++  if(now < 1600000000) { // clock not set yet
++    return brightness;
++  }
++  struct tm local;
++  localtime_r(&now, &local);
++  if(local.tm_hour >= 21 || local.tm_hour < 7) {
++    return brightness > 1 ? brightness / 2 : brightness;
++  }
++  return brightness;
++}
++
 +#endif // KINETOS_EXTRAS
 diff --git a/src/kinetos/kinetos_led.h b/src/kinetos/kinetos_led.h
 new file mode 100644
-index 00000000..db0b1faf
+index 00000000..807856a6
 --- /dev/null
 +++ b/src/kinetos/kinetos_led.h
-@@ -0,0 +1,18 @@
+@@ -0,0 +1,21 @@
 +// LED ring while charging: colour shows the solar share of the charging power (orange = grid,
 +// green = PV), animation is any WS2812FX mode (config "led_fx_charge", e.g. 3 colour wipe,
 +// 12 rainbow cycle, 18 running lights, 43 larson scanner, 44 comet).
@@ -1873,7 +2076,121 @@ index 00000000..db0b1faf
 +// Colour/mode/speed for the charging state. Returns false to keep the upstream behaviour.
 +bool kinetos_led_charging(uint32_t &colour, uint8_t &mode, uint16_t &speed);
 +
++// Brightness halved from 21:00 to 06:59 local time (as the Kinetos firmware did)
++uint8_t kinetos_night_brightness(uint8_t brightness);
++
 +#endif // KINETOS_LED_H
+diff --git a/src/lcd.cpp b/src/lcd.cpp
+index 5afe3920..7486fc93 100644
+--- a/src/lcd.cpp
++++ b/src/lcd.cpp
+@@ -13,6 +13,10 @@
+ #include "divert.h"
+ #include "net_manager.h"
+ #include <sys/time.h>
++#ifdef KINETOS_EXTRAS
++#include "sdm_meter.h"
++#include "rfid.h"
++#endif
+ 
+ static void IGNORE(int ret) {
+ }
+@@ -488,6 +492,14 @@ void LcdTask::displayStateLine(uint8_t evseState, unsigned long &nextUpdate)
+ 
+     case OPENEVSE_STATE_CHARGING:
+       // Line 0 "Charging 47.8A", or "Eco 16.00A" when divert is modulating the rate
++#ifdef KINETOS_EXTRAS
++      // Kinetos: power from the MID meter, "Charging 11.04kW"
++      if(sdmMeter.isValid()) {
++        displayNumberValue(0,
++          (DivertMode::Eco == divert.getMode() && divert.isActive()) ? "Eco" : "Charging",
++          sdmMeter.get(SdmMeter::PowerTotal) / 1000.0, 2, "kW");
++      } else
++#endif
+       displayNumberValue(0,
+         (DivertMode::Eco == divert.getMode() && divert.isActive()) ? "Eco" : "Charging",
+         _evse->getAmps(), 2, "A");
+@@ -596,6 +608,25 @@ void LcdTask::displayStateLine(uint8_t evseState, unsigned long &nextUpdate)
+       // Line 0 shows why the EVSE is paused and, when waiting on divert, the
+       // live incoming power (solar generation, or grid export for grid divert)
+       EvseClient stateClient = _evse->getStateClient();
++#ifdef KINETOS_EXTRAS
++      // Kinetos: animated line while waiting for an RFID tag, auth lock or sleeping
++      static uint8_t frame = 0;
++      static const char *const scanFrames[] = { "Scan NFC tag", "Scan NFC tag   <", "Scan NFC tag  <=", "Scan NFC tag <==", "Scan NFC tag<===" };
++      static const char *const lockFrames[] = { "Auth Locked", "Auth Locked    <", "Auth Locked   <=", "Auth Locked  <==", "Auth Locked <===", "Auth Locked<====" };
++      static const char *const sleepFrames[] = { "    Sleeping", "z   Sleeping   z", "zz  Sleeping  zz", "zzZ Sleeping Zzz" };
++      frame++;
++      if(config_rfid_enabled() && rfid.getAuthenticatedTag().isEmpty())
++      {
++        showText(0, 0, scanFrames[frame % 5], true);
++        nextUpdate = 1000;
++      }
++      else if((_flags & OPENEVSE_VFLAG_AUTH_LOCKED) && EvseClient_OpenEVSE_RFID == stateClient)
++      {
++        showText(0, 0, lockFrames[frame % 6], true);
++        nextUpdate = 1000;
++      }
++      else
++#endif
+       if(EvseClient_OpenEVSE_Divert == stateClient)
+       {
+         // Line 0 "Divert 1.23kW"
+@@ -629,8 +660,13 @@ void LcdTask::displayStateLine(uint8_t evseState, unsigned long &nextUpdate)
+       else
+       {
+         // Line 0 "zzZ Sleeping Zzz"
++#ifdef KINETOS_EXTRAS
++        showText(0, 0, sleepFrames[frame % 4], true);
++        nextUpdate = 1000;
++#else
+         showText(0, 0, "zzZ Sleeping Zzz", true);
+         _updateStateDisplay = false;
++#endif
+       }
+     } break;
+ 
+@@ -660,6 +696,16 @@ void LcdTask::displayInfoLine(LcdInfoLine line, unsigned long &nextUpdate)
+ 
+     case LcdInfoLine::Temperature:
+       // EVSE Temp 30.5C
++#ifdef KINETOS_EXTRAS
++      if(!_evse->isTemperatureValid(EVSE_MONITOR_TEMP_MONITOR)) {
++        // No sensor value: go straight to the next line (if there is another one)
++        if(LcdInfoLine::Temperature != getNextInfoLine(LcdInfoLine::Temperature)) {
++          _infoLineChageTime = millis();
++        }
++        _updateInfoLine = false;
++        break;
++      }
++#endif
+       displayNumberValue(1, "EVSE Temp", _evse->getTemperature(EVSE_MONITOR_TEMP_MONITOR), 1, "C");
+       _updateInfoLine = false;
+       break;
+@@ -672,7 +718,11 @@ void LcdTask::displayInfoLine(LcdInfoLine line, unsigned long &nextUpdate)
+       struct tm timeinfo;
+       localtime_r(&local_time.tv_sec, &timeinfo);
+       //strftime(temp, sizeof(temp), "Time %H:%M:%S", &timeinfo);
++#ifdef KINETOS_EXTRAS
++      strftime(temp, sizeof(temp), "Time    %H:%M:%S", &timeinfo);
++#else
+       strftime(temp, sizeof(temp), "Time %l:%M:%S %p", &timeinfo);
++#endif
+       showText(0, 1, temp, true);
+       nextUpdate = 1000 - (local_time.tv_usec / 1000);
+     } break;
+@@ -684,7 +734,11 @@ void LcdTask::displayInfoLine(LcdInfoLine line, unsigned long &nextUpdate)
+       gettimeofday(&local_time, NULL);
+       struct tm timeinfo;
+       localtime_r(&local_time.tv_sec, &timeinfo);
++#ifdef KINETOS_EXTRAS
++      strftime(temp, sizeof(temp), "%d.%m.%Y", &timeinfo);
++#else
+       strftime(temp, sizeof(temp), "%Y-%m-%d", &timeinfo);
++#endif
+       displayNameValue(1, "Date", temp);
+       _updateInfoLine = false;
+       } break;
 diff --git a/src/lcd_lvgl.cpp b/src/lcd_lvgl.cpp
 index 3308954d..4a014fda 100644
 --- a/src/lcd_lvgl.cpp
@@ -1887,7 +2204,7 @@ index 3308954d..4a014fda 100644
      default:                                       return "claim";
    }
 diff --git a/src/main.cpp b/src/main.cpp
-index 5f007bf5..8f6e64a2 100644
+index 5f007bf5..209a5aa8 100644
 --- a/src/main.cpp
 +++ b/src/main.cpp
 @@ -52,6 +52,9 @@
@@ -1910,7 +2227,7 @@ index 5f007bf5..8f6e64a2 100644
  
  EventLog eventLog;
  CertificateStore certs;
-@@ -272,11 +278,24 @@ void setup()
+@@ -272,13 +278,34 @@ void setup()
    DBUGF("After ocpp.begin: %d", ESPAL.getFreeHeap());
  
    shaper.begin(evse);
@@ -1932,10 +2249,20 @@ index 5f007bf5..8f6e64a2 100644
 +  modbusTcp.begin(evse);
 +  DBUGF("After modbusTcp.begin: %d", ESPAL.getFreeHeap());
 +
++#ifdef KINETOS_EXTRAS
++  // Start-up text chosen by the user (config "lcd_splash", 16 characters per line)
++  String splash = kinetos_lcd_splash.substring(0, 16);
++  lcd.display(splash, 0, 0, 0, LCD_CLEAR_LINE);
++  lcd.display(F("Ver. "), 0, 1, 0, LCD_CLEAR_LINE);
++  lcd.display(currentfirmware, 5, 1, 4 * 1000, LCD_CLEAR_LINE);
++#else
    lcd.display(F("OpenEVSE WiFI"), 0, 0, 0, LCD_CLEAR_LINE);
    lcd.display(currentfirmware, 0, 1, 5 * 1000, LCD_CLEAR_LINE);
++#endif
  
-@@ -332,7 +351,9 @@ void loop()
+   start_mem = last_mem = ESPAL.getFreeHeap();
+ 
+@@ -332,7 +359,9 @@ void loop()
    if(net.isConnected())
    {
      if (vehicle_data_src == VEHICLE_DATA_SRC_TESLA) {
