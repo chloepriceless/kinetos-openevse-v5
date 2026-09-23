@@ -1,3 +1,13 @@
+diff --git a/.env.production b/.env.production
+new file mode 100644
+index 0000000..f31052a
+--- /dev/null
++++ b/.env.production
+@@ -0,0 +1,4 @@
++# Kinetos build: offer firmware updates from our own GitHub releases
++# (assets named <buildenv>-<version>.bin, e.g. kinetos-v5-v5.2.0-dev-kinetos.18.bin).
++# Loaded by `vite build` only; dev, mock and tests keep the upstream default.
++VITE_RELEASES_URL=https://api.github.com/repos/chloepriceless/kinetos-openevse-v5/releases
 diff --git a/AGENTS.md b/AGENTS.md
 index 43d06d2..2846145 100644
 --- a/AGENTS.md
@@ -30,23 +40,39 @@ index 43d06d2..2846145 100644
    endpoint the app calls — extend the fixtures when adding an API call.
  
 diff --git a/dev/fixtures/config.json b/dev/fixtures/config.json
-index 4a83a42..cfb1940 100644
+index 4a83a42..8ab41c0 100644
 --- a/dev/fixtures/config.json
 +++ b/dev/fixtures/config.json
-@@ -1 +1,5 @@
+@@ -1 +1,6 @@
 -{"loadsharing_enabled":true,"loadsharing_role":"controller","loadsharing_group_id":"main_circuit","loadsharing_group_max_current":50,"loadsharing_safety_factor":1,"mqtt_supported_protocols":["mqtt","mqtts"],"http_supported_protocols":["http"],"buildenv":"adafruit_featheresp32","version":"local__464986d2_modified","wifi_serial":"83AF2319CC0","protocol":"-","espinfo":"ESP32r3 2 core WiFi BLE BT","espflash":4194304,"firmware":"E8.0.2","evse_serial":"01","diode_check":true,"gfci_check":true,"ground_check":true,"relay_check":true,"vent_check":true,"temp_check":true,"max_current_soft":48,"service":0,"scale":454,"offset":283,"min_current_hard":0,"max_current_hard":0,"ssid":"Hamkins-IOT","pass":"_DUMMY_PASSWORD","ap_ssid":"","ap_pass":"","lang":"","www_username":"","www_password":"","www_certificate_id":"","hostname":"openevse-9cc0","sntp_hostname":"pool.ntp.org","time_zone":"America/New_York|EST5EDT,M3.2.0,M11.1.0","limit_default_type":"","limit_default_value":0,"emoncms_server":"https://data.openevse.com/emoncms","emoncms_node":"","emoncms_apikey":"","emoncms_fingerprint":"","mqtt_server":"ha.arank.in","mqtt_port":1883,"mqtt_topic":"openevse","mqtt_user":"frigate","mqtt_pass":"_DUMMY_PASSWORD","mqtt_certificate_id":"","mqtt_solar":"","mqtt_grid_ie":"emon/emonpi/power1","mqtt_vrms":"emon/emonpi/vrms","mqtt_live_pwr":"","mqtt_vehicle_soc":"","mqtt_vehicle_range":"","mqtt_vehicle_eta":"","mqtt_vehicle_charge_limit":"","mqtt_home_battery_soc":"","mqtt_home_battery_power":"","mqtt_announce_topic":"openevse/announce/9cc0","ocpp_server":"","ocpp_chargeBoxId":"","ocpp_authkey":"","ocpp_idtag":"DefaultIdTag","ohm":"","divert_type":0,"divert_PV_ratio":1.1,"divert_attack_smoothing_time":20,"divert_decay_smoothing_time":600,"divert_min_charge_time":600,"current_shaper_max_pwr":0,"current_shaper_smoothing_time":60,"current_shaper_min_pause_time":300,"current_shaper_data_maxinterval":120,"vehicle_data_src":2,"tesla_access_token":"","tesla_refresh_token":"","tesla_created_at":18446744073709552000,"tesla_expires_in":18446744073709552000,"tesla_vehicle_id":"","rfid_storage":"AA11BB22,CC33DD44,EE55FF66","scheduler_start_window":600,"flags":115343370,"flags_changed":35659778,"emoncms_enabled":false,"mqtt_enabled":true,"mqtt_reject_unauthorized":true,"mqtt_retained":false,"ohm_enabled":false,"sntp_enabled":true,"tesla_enabled":false,"divert_enabled":true,"current_shaper_enabled":true,"pause_uses_disabled":false,"button_enabled":true,"mqtt_vehicle_range_miles":false,"ocpp_enabled":false,"ocpp_auth_auto":true,"ocpp_auth_offline":true,"ocpp_suspend_evse":false,"ocpp_energize_plug":false,"rfid_enabled":true,"factory_write_lock":true,"is_threephase":false,"wizard_passed":true,"default_state":true,"mqtt_protocol":"mqtt","charge_mode":"fast","voltage":23400,"relay_dc1":true,"relay_dc2":true,"relay_ac":true,"pp_auto":false,"boot_lock":false,"heartbeat_interval":5,"heartbeat_current":6,"over_temp_shutdown":72,"temp_throttle_enabled":false,"temp_throttle_setpoint":65,"overcurrent_monitor":true,"zero_cross":true,"chip_id":"DEADBEEF01","zero_cross_threshold_ma":300,"relay_life_pct":72,"relay_cold_open_count":1834,"relay_elec_damage_x1e6":12500,"relay_transit_drift_warning":false,"relay_transit_baseline_ms":18,"relay_thermal_warning_level":1,"relay_thermal_index_x100":22,"relay_thermal_baseline_x100":14,"relay_stuck_recovery_count":2}
 \ No newline at end of file
 +{"loadsharing_enabled":true,"loadsharing_role":"controller","loadsharing_group_id":"main_circuit","loadsharing_group_max_current":50,"loadsharing_safety_factor":1,"mqtt_supported_protocols":["mqtt","mqtts"],"http_supported_protocols":["http"],"buildenv":"adafruit_featheresp32","version":"local__464986d2_modified","wifi_serial":"83AF2319CC0","protocol":"-","espinfo":"ESP32r3 2 core WiFi BLE BT","espflash":4194304,"firmware":"E8.0.2","evse_serial":"01","diode_check":true,"gfci_check":true,"ground_check":true,"relay_check":true,"vent_check":true,"temp_check":true,"max_current_soft":48,"service":0,"scale":454,"offset":283,"min_current_hard":0,"max_current_hard":0,"ssid":"Hamkins-IOT","pass":"_DUMMY_PASSWORD","ap_ssid":"","ap_pass":"","lang":"","www_username":"","www_password":"","www_certificate_id":"","hostname":"openevse-9cc0","sntp_hostname":"pool.ntp.org","time_zone":"America/New_York|EST5EDT,M3.2.0,M11.1.0","limit_default_type":"","limit_default_value":0,"emoncms_server":"https://data.openevse.com/emoncms","emoncms_node":"","emoncms_apikey":"","emoncms_fingerprint":"","mqtt_server":"ha.arank.in","mqtt_port":1883,"mqtt_topic":"openevse","mqtt_user":"frigate","mqtt_pass":"_DUMMY_PASSWORD","mqtt_certificate_id":"","mqtt_solar":"","mqtt_grid_ie":"emon/emonpi/power1","mqtt_vrms":"emon/emonpi/vrms","mqtt_live_pwr":"","mqtt_vehicle_soc":"","mqtt_vehicle_range":"","mqtt_vehicle_eta":"","mqtt_vehicle_charge_limit":"","mqtt_home_battery_soc":"","mqtt_home_battery_power":"","mqtt_announce_topic":"openevse/announce/9cc0","ocpp_server":"","ocpp_chargeBoxId":"","ocpp_authkey":"","ocpp_idtag":"DefaultIdTag","ohm":"","divert_type":0,"divert_PV_ratio":1.1,"divert_attack_smoothing_time":20,"divert_decay_smoothing_time":600,"divert_min_charge_time":600,"current_shaper_max_pwr":0,"current_shaper_smoothing_time":60,"current_shaper_min_pause_time":300,"current_shaper_data_maxinterval":120,"vehicle_data_src":2,"tesla_access_token":"","tesla_refresh_token":"","tesla_created_at":18446744073709552000,"tesla_expires_in":18446744073709552000,"tesla_vehicle_id":"","rfid_storage":"AA11BB22,CC33DD44,EE55FF66","scheduler_start_window":600,"flags":115343370,"flags_changed":35659778,"emoncms_enabled":false,"mqtt_enabled":true,"mqtt_reject_unauthorized":true,"mqtt_retained":false,"ohm_enabled":false,"sntp_enabled":true,"tesla_enabled":false,"divert_enabled":true,"current_shaper_enabled":true,"pause_uses_disabled":false,"button_enabled":true,"mqtt_vehicle_range_miles":false,"ocpp_enabled":false,"ocpp_auth_auto":true,"ocpp_auth_offline":true,"ocpp_suspend_evse":false,"ocpp_energize_plug":false,"rfid_enabled":true,"factory_write_lock":true,"is_threephase":false,"wizard_passed":true,"default_state":true,"mqtt_protocol":"mqtt","charge_mode":"fast","voltage":23400,"relay_dc1":true,"relay_dc2":true,"relay_ac":true,"pp_auto":false,"boot_lock":false,"heartbeat_interval":5,"heartbeat_current":6,"over_temp_shutdown":72,"temp_throttle_enabled":false,"temp_throttle_setpoint":65,"overcurrent_monitor":true,"zero_cross":true,"chip_id":"DEADBEEF01","zero_cross_threshold_ma":300,"relay_life_pct":72,"relay_cold_open_count":1834,"relay_elec_damage_x1e6":12500,"relay_transit_drift_warning":false,"relay_transit_baseline_ms":18,"relay_thermal_warning_level":1,"relay_thermal_index_x100":22,"relay_thermal_baseline_x100":14,"relay_stuck_recovery_count":2,"dimming_enabled":false,"dimming_input_pin":14,"dimming_input_active_high":false,"dimming_limit":4200,"lightshow_enabled": false,
 +  "mqtt_ls_budget": "",
 +  "evse_id": "DE*KIG*E52513053423611173E",
 +  "lcd_splash": "Kinetos ETH/WiFi",
-+  "led_pv_enabled":true,"led_fx_charge":3,"led_brightness":128,"modbus_tcp_enabled":false,"modbus_tcp_port":502,"ha_discovery_enabled":true}
++  "led_pv_enabled":true,"led_fx_charge":3,"led_brightness":128,"modbus_tcp_enabled":false,"modbus_tcp_port":502,"ha_discovery_enabled":true,
++  "button_action":1,"max_current_1p":20,"wled_enabled":true,"rfid_cars":"AA11BB22=1;CC33DD44=2"}
 \ No newline at end of file
+diff --git a/dev/fixtures/kinetos_sessions.csv b/dev/fixtures/kinetos_sessions.csv
+new file mode 100644
+index 0000000..24f4498
+--- /dev/null
++++ b/dev/fixtures/kinetos_sessions.csv
+@@ -0,0 +1,9 @@
++start;end;minutes;kwh;meter_start_kwh;meter_end_kwh;tag;user;car
++2026-04-03T18:12:40;2026-04-03T22:47:05;274;21.36;1180.42;1201.78;AA11BB22;Alice;1
++2026-04-09T07:55:10;2026-04-09T09:20:31;85;9.84;1201.78;1211.62;CC33DD44;Bob;2
++2026-04-17T19:30:02;2026-04-18T01:02:44;333;30.12;1211.62;1241.74;AA11BB22;Alice;1
++2026-04-26T12:04:18;2026-04-26T13:10:55;67;4.21;1241.74;1245.95;;;
++2026-05-02T08:41:00;2026-05-02T10:03:12;82;11.05;1245.95;1257.00;CC33DD44;Bob;2
++2026-05-08T20:15:33;2026-05-09T00:40:09;265;24.60;1257.00;1281.60;AA11BB22;Alice;1
++2026-05-14T17:48:51;2026-05-14T19:02:27;74;8.73;1281.60;1290.33;EE55FF66;;
++2026-05-19T18:22:05;2026-05-19T21:58:40;217;19.88;1290.33;1310.21;AA11BB22;Alice;1
 diff --git a/dev/fixtures/status.json b/dev/fixtures/status.json
-index fa44878..ddeb862 100644
+index fa44878..e90a052 100644
 --- a/dev/fixtures/status.json
 +++ b/dev/fixtures/status.json
-@@ -109,5 +109,23 @@
+@@ -109,5 +109,28 @@
    "probe3_max": 0,
    "probe3_n": 0,
    "reset_reason": 3,
@@ -69,18 +95,29 @@ index fa44878..ddeb862 100644
 +  "dimming_source": 0,
 +  "dimming_limit_a": 0,
 +  "pv_share": 0.42,
++  "session_active": true,
++  "session_kwh": 4.93,
++  "session_tag": "AA11BB22",
++  "limit_1p_active": false,
++  "wled_on": false,
 +  "gpio14": 1,
 +  "gpio15": 1,
 +  "gpio39": 1
 +}
 diff --git a/dev/mock-plugin.js b/dev/mock-plugin.js
-index 4639b41..cb6a8fd 100644
+index 4639b41..3cf60aa 100644
 --- a/dev/mock-plugin.js
 +++ b/dev/mock-plugin.js
-@@ -132,6 +132,21 @@ export function mockPlugin() {
+@@ -132,6 +132,27 @@ export function mockPlugin() {
    // the "Clear dump" flow can be exercised without hardware.
    let crashPresent = true
  
++  // Kinetos charging-session log (GET/DELETE /kinetos/sessions): CSV text,
++  // served like the firmware (text/plain + attachment). DELETE empties it
++  // back to the bare header.
++  const SESSIONS_HEADER = 'start;end;minutes;kwh;meter_start_kwh;meter_end_kwh;tag;user;car\n'
++  let sessionsCsv = loadFixture('kinetos_sessions.csv')
++
 +  // Kinetos grid dimming (§14a): the remote request set by POST /dimming.
 +  // Mirrors the firmware: refused with 409 while dimming_enabled is off.
 +  let dimmingRemote = false
@@ -99,7 +136,7 @@ index 4639b41..cb6a8fd 100644
    // Advisory acks laid over whatever fixture/scenario is live. The firmware
    // persists these; here they live for the dev-server run and are dropped when
    // the scenario changes, since a different scenario is a different charger.
-@@ -182,6 +197,12 @@ export function mockPlugin() {
+@@ -182,6 +203,12 @@ export function mockPlugin() {
        session_elapsed: charging
          ? (baseStatus.session_elapsed ?? 0) + tickCount * 2
          : baseStatus.session_elapsed,
@@ -112,7 +149,7 @@ index 4639b41..cb6a8fd 100644
      })
    }
  
-@@ -605,6 +626,42 @@ export function mockPlugin() {
+@@ -605,6 +632,70 @@ export function mockPlugin() {
            return
          }
  
@@ -150,6 +187,34 @@ index 4639b41..cb6a8fd 100644
 +            })
 +            return
 +          }
++        }
++
++        if (url === '/api/kinetos/sessions') {
++          if (req.method === 'DELETE') {
++            sessionsCsv = SESSIONS_HEADER
++            res.writeHead(200, { 'Content-Type': 'text/plain' })
++            res.end('ok\n')
++            return
++          }
++          res.writeHead(200, {
++            'Content-Type': 'text/plain',
++            'Content-Disposition': 'attachment; filename="sessions.csv"',
++          })
++          res.end(sessionsCsv)
++          return
++        }
++
++        // Kinetos Prometheus exposition (the About page links to it).
++        if (url === '/api/metrics') {
++          const st = effectiveFixture('/api/status')
++          res.writeHead(200, { 'Content-Type': 'text/plain; version=0.0.4' })
++          res.end(
++            '# TYPE openevse_state gauge\n' +
++            `openevse_state ${st.state ?? 0}\n` +
++            '# TYPE openevse_session_active gauge\n' +
++            `openevse_session_active ${st.session_active ? 1 : 0}\n`,
++          )
++          return
 +        }
 +
          if (url === '/api/reset' && req.method === 'GET') {
@@ -190,6 +255,164 @@ index b564ca6..5e5b0fb 100644
    // Load Sharing is Labs-gated (uisettings.dev_features) and hidden by default,
    // so it is intentionally omitted from the default screenshot set.
    { name: 'settings-emoncms', route: '/settings/emoncms' },
+diff --git a/scripts/screenshots.mjs b/scripts/screenshots.mjs
+index d9cb0c0..8d76915 100644
+--- a/scripts/screenshots.mjs
++++ b/scripts/screenshots.mjs
+@@ -22,7 +22,8 @@ const outDir = join(root, 'docs', 'screenshots')
+ // which the mock server doesn't proxy. Unauthenticated CI hits GitHub's rate
+ // limit (403) — the app swallows it, but the harness flags any 4xx as a hard
+ // failure. Intercept the call and serve a deterministic fixture instead.
+-const GITHUB_RELEASES_GLOB = 'https://api.github.com/repos/OpenEVSE/ESP32_WiFi_V4.x/releases*'
++// Any repo: the list URL is build-configurable (VITE_RELEASES_URL).
++const GITHUB_RELEASES_GLOB = 'https://api.github.com/repos/**/releases*'
+ const githubReleasesBody = readFileSync(join(root, 'dev', 'fixtures', 'github-releases.json'), 'utf8')
+ 
+ const onlyArg = process.argv.indexOf('--only')
+diff --git a/src/lib/__tests__/utils.test.js b/src/lib/__tests__/utils.test.js
+index 789c4c8..73a1135 100644
+--- a/src/lib/__tests__/utils.test.js
++++ b/src/lib/__tests__/utils.test.js
+@@ -239,6 +239,18 @@ describe('compareVersion', () => {
+     expect(compareVersion('v1.0.0.1', 'v1.0.0')).toBe(1)
+     expect(compareVersion('v1.0', 'v1.0.0')).toBe(-1)
+   })
++
++  it('orders Kinetos build numbers numerically and above stock releases', () => {
++    const k9 = 'v5.2.0-dev-kinetos.9'
++    const k17 = 'v5.2.0-dev-kinetos.17'
++    const k18 = 'v5.2.0-dev-kinetos.18'
++    expect(compareVersion(k17, k9)).toBe(1)
++    expect(compareVersion(k18, k17)).toBe(1)
++    expect(compareVersion(k9, k17)).toBe(-1)
++    expect(compareVersion(k18, k18)).toBe(0)
++    expect(compareVersion(k9, 'v5.1.5')).toBe(1)
++    expect(compareVersion('v5.1.5', k9)).toBe(-1)
++  })
+ })
+ 
+ describe('miles2km', () => {
+diff --git a/src/lib/components/history/SessionList.svelte b/src/lib/components/history/SessionList.svelte
+new file mode 100644
+index 0000000..374bfed
+--- /dev/null
++++ b/src/lib/components/history/SessionList.svelte
+@@ -0,0 +1,75 @@
++<!-- src/lib/components/history/SessionList.svelte
++     Presentational: the Kinetos charging-session table plus per-user totals.
++     The History route fetches, filters and formats; this only renders. -->
++<script>
++  import { _ } from 'svelte-i18n'
++  import Card from '../ui/Card.svelte'
++  import Icon from '../../icons/Icon.svelte'
++
++  // rows:   [{ key, start, end, duration, kwh, who, tag, car }]
++  // totals: [{ key, who, count, kwh }]   total: { count, kwh }
++  let { rows = [], totals = [], total = { count: 0, kwh: '' }, emptyText = '' } = $props()
++</script>
++
++{#if totals.length > 0}
++  <Card class="mb-3 p-4">
++    <h2 class="mb-2 text-sm font-semibold text-text-dim">{$_('kinetos.sessions.totals')}</h2>
++    <table class="w-full text-sm">
++      <thead>
++        <tr class="text-left text-xs text-text-dim">
++          <th class="py-1 font-normal">{$_('kinetos.sessions.col_user')}</th>
++          <th class="py-1 text-right font-normal">{$_('kinetos.sessions.count')}</th>
++          <th class="py-1 text-right font-normal">{$_('kinetos.sessions.col_kwh')}</th>
++        </tr>
++      </thead>
++      <tbody>
++        {#each totals as t (t.key)}
++          <tr class="border-t border-border">
++            <td class="py-1.5 text-text">{t.who}</td>
++            <td class="py-1.5 text-right tabular-nums text-text">{t.count}</td>
++            <td class="py-1.5 text-right tabular-nums text-text">{t.kwh}</td>
++          </tr>
++        {/each}
++        {#if totals.length > 1}
++          <tr class="border-t border-border font-semibold">
++            <td class="py-1.5 text-text">{$_('kinetos.sessions.total')}</td>
++            <td class="py-1.5 text-right tabular-nums text-text">{total.count}</td>
++            <td class="py-1.5 text-right tabular-nums text-text">{total.kwh}</td>
++          </tr>
++        {/if}
++      </tbody>
++    </table>
++  </Card>
++{/if}
++
++{#if rows.length === 0}
++  <Card class="flex flex-col items-center gap-3 py-12 text-text-dim">
++    <Icon icon="mdi:ev-station" size={40} />
++    <p class="text-sm">{emptyText}</p>
++  </Card>
++{:else}
++  <Card class="overflow-x-auto p-2 sm:p-4">
++    <table class="w-full text-xs sm:text-sm">
++      <thead>
++        <tr class="text-left text-xs text-text-dim">
++          <th class="px-1 py-1 font-normal">{$_('kinetos.sessions.col_start')}</th>
++          <th class="px-1 py-1 font-normal">{$_('kinetos.sessions.col_duration')}</th>
++          <th class="px-1 py-1 text-right font-normal">{$_('kinetos.sessions.col_kwh')}</th>
++          <th class="px-1 py-1 font-normal">{$_('kinetos.sessions.col_user')}</th>
++          <th class="px-1 py-1 text-right font-normal">{$_('kinetos.sessions.col_car')}</th>
++        </tr>
++      </thead>
++      <tbody>
++        {#each rows as r (r.key)}
++          <tr class="border-t border-border" title={r.end}>
++            <td class="whitespace-nowrap px-1 py-1.5 tabular-nums text-text">{r.start}</td>
++            <td class="whitespace-nowrap px-1 py-1.5 text-text">{r.duration}</td>
++            <td class="px-1 py-1.5 text-right tabular-nums text-text">{r.kwh}</td>
++            <td class="max-w-32 truncate px-1 py-1.5 text-text" title={r.tag}>{r.who}</td>
++            <td class="px-1 py-1.5 text-right tabular-nums text-text">{r.car}</td>
++          </tr>
++        {/each}
++      </tbody>
++    </table>
++  </Card>
++{/if}
+diff --git a/src/lib/config/__tests__/firmware.test.js b/src/lib/config/__tests__/firmware.test.js
+index d5be4c4..6df7e66 100644
+--- a/src/lib/config/__tests__/firmware.test.js
++++ b/src/lib/config/__tests__/firmware.test.js
+@@ -1,6 +1,6 @@
+ // src/lib/config/__tests__/firmware.test.js
+ import { describe, it, expect } from 'vitest'
+-import { classifyReleases, findAsset, updateAvailable } from '../firmware.js'
++import { classifyReleases, findAsset, updateAvailable, RELEASES_URL, DEFAULT_RELEASES_URL } from '../firmware.js'
+ 
+ const RELEASES = [
+   { tag_name: 'v5.1.2', name: 'v5.1.2', prerelease: false, assets: [
+@@ -40,8 +40,27 @@ describe('updateAvailable', () => {
+     expect(updateAvailable('v5.1.2', 'v5.1.2')).toBe(false)
+     expect(updateAvailable('v5.0.0', 'v5.1.2')).toBe(false)
+   })
++  it('offers newer Kinetos builds only', () => {
++    expect(updateAvailable('v5.2.0-dev-kinetos.18', 'v5.2.0-dev-kinetos.9')).toBe(true)
++    expect(updateAvailable('v5.2.0-dev-kinetos.17', 'v5.2.0-dev-kinetos.18')).toBe(false)
++    expect(updateAvailable('v5.2.0-dev-kinetos.9', 'v5.1.5')).toBe(true)
++  })
+   it('is false for an unparseable installed version', () => {
+     expect(updateAvailable('v5.2.0', 'local__abc_modified')).toBe(false)
+     expect(updateAvailable('', 'v5.1.2')).toBe(false)
+   })
+ })
++
++describe('RELEASES_URL', () => {
++  it('defaults to the upstream releases when VITE_RELEASES_URL is unset', () => {
++    expect(DEFAULT_RELEASES_URL).toBe('https://api.github.com/repos/OpenEVSE/ESP32_WiFi_V4.x/releases')
++    expect(RELEASES_URL).toBe(import.meta.env.VITE_RELEASES_URL || DEFAULT_RELEASES_URL)
++  })
++})
++
++describe('findAsset (Kinetos)', () => {
++  it('matches kinetos-v5-<version>.bin by buildenv prefix', () => {
++    const rel = { assets: [{ name: 'kinetos-v5-v5.2.0-dev-kinetos.18.bin' }, { name: 'other.bin' }] }
++    expect(findAsset(rel, 'kinetos-v5').name).toBe('kinetos-v5-v5.2.0-dev-kinetos.18.bin')
++  })
++})
 diff --git a/src/lib/config/__tests__/pages.test.js b/src/lib/config/__tests__/pages.test.js
 index 10428d0..0eb0d21 100644
 --- a/src/lib/config/__tests__/pages.test.js
@@ -244,6 +467,25 @@ index 10428d0..0eb0d21 100644
    it('gates the Load Sharing page on the dev_features (Labs) flag', () => {
      const keysFor = (opts) =>
        pagesBySection({ tft_theme: 'dark' }, opts).flatMap((g) => g.pages.map((p) => p.key))
+diff --git a/src/lib/config/firmware.js b/src/lib/config/firmware.js
+index 85afb56..f8d72a5 100644
+--- a/src/lib/config/firmware.js
++++ b/src/lib/config/firmware.js
+@@ -2,9 +2,13 @@
+ // GitHub firmware-release helpers for the Firmware page.
+ import { compareVersion } from '../utils.js'
+ 
+-const RELEASES_URL =
++export const DEFAULT_RELEASES_URL =
+   'https://api.github.com/repos/OpenEVSE/ESP32_WiFi_V4.x/releases'
+ 
++// Build-time override (VITE_RELEASES_URL, e.g. from .env.production) so a
++// fork can offer its own GitHub releases; upstream's list otherwise.
++export const RELEASES_URL = import.meta.env?.VITE_RELEASES_URL || DEFAULT_RELEASES_URL
++
+ /** Fetch the GitHub releases. Returns [] on any failure (never throws). */
+ export async function fetchReleases() {
+   try {
 diff --git a/src/lib/config/pages.js b/src/lib/config/pages.js
 index 7c34b07..04ea218 100644
 --- a/src/lib/config/pages.js
@@ -426,7 +668,7 @@ index 62fcc0b..0000000
 -  }
 -})
 diff --git a/src/lib/i18n/en.json b/src/lib/i18n/en.json
-index 246246e..dbae086 100644
+index 246246e..f13311b 100644
 --- a/src/lib/i18n/en.json
 +++ b/src/lib/i18n/en.json
 @@ -209,6 +209,7 @@
@@ -445,7 +687,7 @@ index 246246e..dbae086 100644
        "emoncms": "EmonCMS",
        "firmware": "Firmware",
        "security": "Security",
-@@ -1303,5 +1305,132 @@
+@@ -1303,5 +1305,193 @@
      "invalid": "Incorrect username or password.",
      "locked": "Too many attempts. Please wait a moment and try again.",
      "error": "Could not reach the charger. Try again."
@@ -507,7 +749,12 @@ index 246246e..dbae086 100644
 +      "fx": "Charge animation",
 +      "title": "LED ring",
 +      "lightshow": "Light show",
-+      "lightshow_desc": "A random LED effect every 16 s, its name on the display. Errors still show in red."
++      "lightshow_desc": "A random LED effect every 16 s, its name on the display. Errors still show in red.",
++      "wled": "WLED API",
++      "wled_desc": "WLED API (WLED app / Home Assistant WLED integration). No login — only controls the LEDs.",
++      "wled_on": "WLED control now",
++      "wled_active": "Active",
++      "wled_idle": "Idle"
 +    },
 +    "fx": {
 +      "0": "Static",
@@ -561,7 +808,9 @@ index 246246e..dbae086 100644
 +    },
 +    "display": {
 +      "splash": "Start-up text",
-+      "splash_desc": "Shown on the first display line after a restart, up to 16 characters."
++      "splash_desc": "Shown on the first display line after a restart, up to 16 characters.",
++      "message": "Messages via MQTT",
++      "message_desc": "Publish to {topic} to show a message: plain text (a line break starts line 2) or JSON with line1, line2 and time (seconds, 1 to 300, default 10). 16 characters per line."
 +    },
 +    "budget": {
 +      "topic": "Live budget topic (MQTT)",
@@ -575,6 +824,60 @@ index 246246e..dbae086 100644
 +      "evse_id_desc": "Charge point ID (eMI3), e.g. for OCPP, roaming or billing. Leave empty for the Kinetos default DE*KIG*E + controller serial.",
 +      "evse_serial": "Controller serial",
 +      "wifi_serial": "WiFi module serial"
++    },
++    "sessions": {
++      "tab_log": "Event log",
++      "tab_sessions": "Charging sessions",
++      "loading": "Loading charging sessions…",
++      "error_title": "Couldn't load the session log",
++      "error_body": "The charger didn't return its session log. Please try again.",
++      "empty": "No charging sessions logged yet",
++      "empty_filter": "No sessions match this filter",
++      "month": "Month",
++      "all_months": "All months",
++      "user": "Tag / user",
++      "all_users": "Everyone",
++      "no_tag": "Without RFID",
++      "totals": "Totals",
++      "total": "Total",
++      "count": "Sessions",
++      "col_start": "Start",
++      "col_duration": "Duration",
++      "col_kwh": "kWh",
++      "col_user": "Tag / user",
++      "col_car": "Car",
++      "download": "Download CSV",
++      "clear": "Clear log",
++      "clear_title": "Clear the session log?",
++      "clear_body": "All logged charging sessions are deleted from the charger. Download the CSV first if you still need it.",
++      "clear_yes": "Clear",
++      "clear_no": "Cancel",
++      "active": "Charging now",
++      "active_value": "{kwh} kWh · {user}"
++    },
++    "rfid": {
++      "car": "TeslaMate car",
++      "car_desc": "Optional TeslaMate car ID (1 to 20) per tag. When the tag starts a session, the charger switches the vehicle topics to teslamate/cars/<ID>. Needs vehicle data source MQTT with the TeslaMate topics (Vehicle page).",
++      "car_invalid": "Enter a car ID from 1 to 20, or leave empty."
++    },
++    "button": {
++      "action": "Front button action",
++      "action_desc": "Short press (under 1 s) does this action. 1–2 s shows the network info, over 2 s starts the access point, 10 s resets to factory defaults.",
++      "action_0": "None",
++      "action_1": "Start / pause (manual override)",
++      "action_2": "Boost 1 h"
++    },
++    "onephase": {
++      "limit": "Max current when the car charges on one phase",
++      "limit_desc": "0 = off (0 to 32 A). In Germany a single-phase load may draw at most 4.6 kVA (about 20 A at 230 V).",
++      "invalid": "Enter 0 (off) to 32 A.",
++      "active": "One-phase limit now",
++      "active_on": "Active",
++      "active_off": "Inactive"
++    },
++    "metrics": {
++      "title": "Prometheus metrics",
++      "desc": "Metrics for Prometheus in text format at this URL, with the same login as this web UI."
 +    }
    }
  }
@@ -4565,6 +4868,36 @@ index 1ba4ed2..0000000
 -    "error": "Nem sikerült elérni a töltőt. Próbálja újra."
 -  }
 -}
+diff --git a/src/lib/kinetos/__tests__/charger.test.js b/src/lib/kinetos/__tests__/charger.test.js
+new file mode 100644
+index 0000000..b4803de
+--- /dev/null
++++ b/src/lib/kinetos/__tests__/charger.test.js
+@@ -0,0 +1,24 @@
++import { describe, it, expect } from 'vitest'
++import { buttonActionOptions, isValidOnePhaseLimit } from '../charger.js'
++
++describe('buttonActionOptions', () => {
++  it('lists none, start/pause and boost', () => {
++    expect(buttonActionOptions((k) => k)).toEqual([
++      { value: '0', label: 'kinetos.button.action_0' },
++      { value: '1', label: 'kinetos.button.action_1' },
++      { value: '2', label: 'kinetos.button.action_2' },
++    ])
++  })
++})
++
++describe('isValidOnePhaseLimit', () => {
++  it('accepts 0 (off) to 32 A whole amps', () => {
++    expect(isValidOnePhaseLimit(0)).toBe(true)
++    expect(isValidOnePhaseLimit(20)).toBe(true)
++    expect(isValidOnePhaseLimit(32)).toBe(true)
++    expect(isValidOnePhaseLimit(33)).toBe(false)
++    expect(isValidOnePhaseLimit(-1)).toBe(false)
++    expect(isValidOnePhaseLimit(16.5)).toBe(false)
++    expect(isValidOnePhaseLimit(null)).toBe(false)
++  })
++})
 diff --git a/src/lib/kinetos/__tests__/dimming.test.js b/src/lib/kinetos/__tests__/dimming.test.js
 new file mode 100644
 index 0000000..488b504
@@ -4728,6 +5061,166 @@ index 0000000..a6a62a8
 +    expect(byLabel(g)['kinetos.meter.import'].value).toBeNull()
 +  })
 +})
+diff --git a/src/lib/kinetos/__tests__/rfidCars.test.js b/src/lib/kinetos/__tests__/rfidCars.test.js
+new file mode 100644
+index 0000000..f2260fa
+--- /dev/null
++++ b/src/lib/kinetos/__tests__/rfidCars.test.js
+@@ -0,0 +1,47 @@
++import { describe, it, expect } from 'vitest'
++import { parseRfidCars, serializeRfidCars, setCarForTag, carForTag } from '../rfidCars.js'
++
++describe('parseRfidCars', () => {
++  it('parses UID=car pairs', () => {
++    expect(parseRfidCars('AA11BB22=1;CC33DD44=2')).toEqual({ AA11BB22: 1, CC33DD44: 2 })
++  })
++  it('skips malformed and out-of-range pairs', () => {
++    expect(parseRfidCars('AA=1;;=3;BB;CC=x;DD=0;EE= 4 ')).toEqual({ AA: 1, EE: 4 })
++    expect(parseRfidCars('')).toEqual({})
++    expect(parseRfidCars(undefined)).toEqual({})
++  })
++})
++
++describe('serializeRfidCars', () => {
++  it('writes UID=car pairs joined by ;', () => {
++    expect(serializeRfidCars({ AA: 1, BB: 12 })).toBe('AA=1;BB=12')
++    expect(serializeRfidCars({ AA: 0, BB: 2 })).toBe('BB=2')
++    expect(serializeRfidCars({})).toBe('')
++  })
++  it('round-trips', () => {
++    expect(serializeRfidCars(parseRfidCars('X=3;Y=4'))).toBe('X=3;Y=4')
++  })
++})
++
++describe('setCarForTag', () => {
++  it('adds, replaces and removes a mapping', () => {
++    expect(setCarForTag('', 'AA', 1)).toBe('AA=1')
++    expect(setCarForTag('AA=1;BB=2', 'AA', 3)).toBe('AA=3;BB=2')
++    expect(setCarForTag('AA=1;BB=2', 'AA', null)).toBe('BB=2')
++    expect(setCarForTag('AA=1', 'AA', 0)).toBe('')
++  })
++  it('returns null for an invalid car id', () => {
++    expect(setCarForTag('AA=1', 'AA', 99)).toBeNull()
++    expect(setCarForTag('AA=1', 'AA', 1.5)).toBeNull()
++  })
++})
++
++describe('case-insensitive UIDs (as the firmware matches them)', () => {
++  it('looks up and replaces regardless of case', () => {
++    expect(carForTag('aa11=2', 'AA11')).toBe(2)
++    expect(carForTag('aa11=2', 'BB')).toBeNull()
++    expect(carForTag(undefined, 'BB')).toBeNull()
++    expect(setCarForTag('aa11=2;BB=1', 'AA11', 3)).toBe('AA11=3;BB=1')
++    expect(setCarForTag('aa11=2;BB=1', 'AA11', null)).toBe('BB=1')
++  })
++})
+diff --git a/src/lib/kinetos/__tests__/sessions.test.js b/src/lib/kinetos/__tests__/sessions.test.js
+new file mode 100644
+index 0000000..4cc470c
+--- /dev/null
++++ b/src/lib/kinetos/__tests__/sessions.test.js
+@@ -0,0 +1,101 @@
++import { describe, it, expect } from 'vitest'
++import {
++  parseSessionsCsv, sortNewestFirst, monthKey, sessionMonths, filterSessions,
++  totalsByTag, sessionTotal, sessionTags, formatSessionTime, formatDuration, formatKwh,
++} from '../sessions.js'
++
++const CSV = [
++  'start;end;minutes;kwh;meter_start_kwh;meter_end_kwh;tag;user;car',
++  '2026-04-30T21:10:00;2026-05-01T01:40:00;270;18.4;1200.1;1218.5;AA11BB22;Alice;1',
++  '2026-05-02T08:00:00;2026-05-02T09:30:00;90;6.25;1218.5;1224.75;CC33DD44;Bob;',
++  '2026-05-20T18:00:00;2026-05-20T19:00:00;60;7.5;1224.75;1232.25;AA11BB22;Alice;1',
++  ';2026-05-21T06:00:00;30;2;1232.25;1234.25;;;',
++  '',
++].join('\r\n')
++
++describe('parseSessionsCsv', () => {
++  it('parses rows by header name', () => {
++    const rows = parseSessionsCsv(CSV)
++    expect(rows).toHaveLength(4)
++    expect(rows[0]).toEqual({
++      start: '2026-04-30T21:10:00', end: '2026-05-01T01:40:00', minutes: 270, kwh: 18.4,
++      meterStart: 1200.1, meterEnd: 1218.5, tag: 'AA11BB22', user: 'Alice', car: 1,
++    })
++    expect(rows[1].car).toBeNull()
++    expect(rows[3].start).toBe('')
++    expect(rows[3].tag).toBe('')
++  })
++  it('returns [] for a header-only log', () => {
++    expect(parseSessionsCsv('start;end;minutes;kwh;meter_start_kwh;meter_end_kwh;tag;user;car\n')).toEqual([])
++  })
++  it('tolerates reordered/added columns and missing trailing cells', () => {
++    const rows = parseSessionsCsv('kwh;start;extra\n3.5;2026-05-01T10:00:00')
++    expect(rows[0]).toMatchObject({ kwh: 3.5, start: '2026-05-01T10:00:00', tag: '', car: null })
++  })
++  it('returns null for text that is not a session log', () => {
++    expect(parseSessionsCsv('<html>404</html>')).toBeNull()
++    expect(parseSessionsCsv('')).toBeNull()
++    expect(parseSessionsCsv(undefined)).toBeNull()
++    expect(parseSessionsCsv({ msg: 'error' })).toBeNull()
++  })
++})
++
++describe('sorting and months', () => {
++  const rows = parseSessionsCsv(CSV)
++  it('sorts newest first, falling back to end, undated last', () => {
++    const sorted = sortNewestFirst([...rows, { start: '', end: '' }])
++    expect(sorted.map((s) => s.start || s.end)).toEqual([
++      '2026-05-21T06:00:00', '2026-05-20T18:00:00', '2026-05-02T08:00:00', '2026-04-30T21:10:00', '',
++    ])
++  })
++  it('keys a session to the month it started', () => {
++    expect(monthKey(rows[0])).toBe('2026-04')
++    expect(monthKey(rows[3])).toBe('2026-05')
++    expect(monthKey({ start: '', end: '' })).toBe('')
++  })
++  it('lists distinct months newest first', () => {
++    expect(sessionMonths(rows)).toEqual(['2026-05', '2026-04'])
++  })
++})
++
++describe('filters and totals', () => {
++  const rows = parseSessionsCsv(CSV)
++  it('filters by month and tag', () => {
++    expect(filterSessions(rows, { month: '2026-05' })).toHaveLength(3)
++    expect(filterSessions(rows, { tag: 'AA11BB22' })).toHaveLength(2)
++    expect(filterSessions(rows, { month: '2026-05', tag: 'AA11BB22' })).toHaveLength(1)
++    expect(filterSessions(rows, { tag: '' })).toHaveLength(1)
++    expect(filterSessions(rows)).toHaveLength(4)
++  })
++  it('totals per tag, largest energy first', () => {
++    expect(totalsByTag(filterSessions(rows, { month: '2026-05' }))).toEqual([
++      { tag: 'AA11BB22', user: 'Alice', count: 1, kwh: 7.5 },
++      { tag: 'CC33DD44', user: 'Bob', count: 1, kwh: 6.25 },
++      { tag: '', user: '', count: 1, kwh: 2 },
++    ])
++    expect(totalsByTag(rows)[0]).toEqual({ tag: 'AA11BB22', user: 'Alice', count: 2, kwh: 25.9 })
++  })
++  it('sums a grand total', () => {
++    expect(sessionTotal(rows)).toEqual({ count: 4, kwh: 34.15 })
++    expect(sessionTotal([])).toEqual({ count: 0, kwh: 0 })
++  })
++  it('lists tags with their user name, sorted by label', () => {
++    expect(sessionTags(rows)).toEqual([
++      { tag: '', user: '' },
++      { tag: 'AA11BB22', user: 'Alice' },
++      { tag: 'CC33DD44', user: 'Bob' },
++    ])
++  })
++})
++
++describe('formatting', () => {
++  it('formats times, durations and energy', () => {
++    expect(formatSessionTime('2026-05-20T18:00:00')).toBe('2026-05-20 18:00')
++    expect(formatSessionTime('')).toBe('')
++    expect(formatDuration(45)).toBe('45 min')
++    expect(formatDuration(125)).toBe('2 h 05 min')
++    expect(formatDuration(null)).toBe('')
++    expect(formatKwh(6.254)).toBe('6.25')
++    expect(formatKwh(null)).toBe('')
++  })
++})
 diff --git a/src/lib/kinetos/__tests__/status.test.js b/src/lib/kinetos/__tests__/status.test.js
 new file mode 100644
 index 0000000..707e3c4
@@ -4834,6 +5327,29 @@ index 0000000..882ce5f
 +    expect(isValidCarId(20)).toBe(true)
 +  })
 +})
+diff --git a/src/lib/kinetos/charger.js b/src/lib/kinetos/charger.js
+new file mode 100644
+index 0000000..b806693
+--- /dev/null
++++ b/src/lib/kinetos/charger.js
+@@ -0,0 +1,17 @@
++// src/lib/kinetos/charger.js
++// Kinetos charger-behaviour settings: front button action and the
++// single-phase current limit.
++
++/** button_action values: 0 none, 1 start/pause (manual override), 2 boost 1 h. */
++export const BUTTON_ACTIONS = [0, 1, 2]
++
++export function buttonActionOptions(t) {
++  return BUTTON_ACTIONS.map((v) => ({ value: String(v), label: t(`kinetos.button.action_${v}`) }))
++}
++
++/** max_current_1p: 0 = off, else 1..32 A (whole amps). */
++export const ONE_PHASE_LIMIT = { min: 0, max: 32 }
++
++export function isValidOnePhaseLimit(v) {
++  return Number.isInteger(v) && v >= ONE_PHASE_LIMIT.min && v <= ONE_PHASE_LIMIT.max
++}
 diff --git a/src/lib/kinetos/dimming.js b/src/lib/kinetos/dimming.js
 new file mode 100644
 index 0000000..a55c55f
@@ -4974,6 +5490,225 @@ index 0000000..3447978
 +  rows.push({ labelKey: 'kinetos.meter.import', value: round(s.meter_import_kwh, 2), unit: 'units.kwh' })
 +  return { titleKey: 'kinetos.meter.title', rows }
 +}
+diff --git a/src/lib/kinetos/rfidCars.js b/src/lib/kinetos/rfidCars.js
+new file mode 100644
+index 0000000..2d5fb3f
+--- /dev/null
++++ b/src/lib/kinetos/rfidCars.js
+@@ -0,0 +1,62 @@
++// src/lib/kinetos/rfidCars.js
++// RFID tag → TeslaMate car mapping, stored by the Kinetos firmware as one
++// config string: rfid_cars = "UID=1;UID2=2" (car = TeslaMate car id). When a
++// mapped tag starts a session the firmware points the vehicle MQTT topics at
++// teslamate/cars/<id>.
++import { isValidCarId } from './teslamate.js'
++
++/** "UID=1;UID2=2" → { UID: 1, UID2: 2 }. Malformed pairs are skipped. */
++export function parseRfidCars(str) {
++  const out = {}
++  if (typeof str !== 'string') return out
++  for (const pair of str.split(';')) {
++    const i = pair.indexOf('=')
++    if (i <= 0) continue
++    const uid = pair.slice(0, i).trim()
++    const car = Number(pair.slice(i + 1).trim())
++    if (uid && isValidCarId(car)) out[uid] = car
++  }
++  return out
++}
++
++/** { UID: 1 } → "UID=1". Entries with an invalid car id are dropped. */
++export function serializeRfidCars(map) {
++  return Object.entries(map ?? {})
++    .filter(([uid, car]) => uid && isValidCarId(car))
++    .map(([uid, car]) => `${uid}=${car}`)
++    .join(';')
++}
++
++/**
++ * The new rfid_cars string with `uid` mapped to `car`; a null/0/empty car
++ * removes the mapping. Returns null for an invalid car id (nothing to save).
++ */
++export function setCarForTag(str, uid, car) {
++  const remove = car === null || car === undefined || car === '' || car === 0
++  const n = Number(car)
++  if (!remove && !isValidCarId(n)) return null
++  // Keep the other entries in place; the firmware matches UIDs
++  // case-insensitively, so every spelling of this UID is replaced.
++  const out = {}
++  let placed = false
++  for (const [k, v] of Object.entries(parseRfidCars(str))) {
++    if (!sameUid(k, uid)) out[k] = v
++    else if (!remove && !placed) {
++      out[uid] = n
++      placed = true
++    }
++  }
++  if (!remove && !placed) out[uid] = n
++  return serializeRfidCars(out)
++}
++
++function sameUid(a, b) {
++  return String(a).toUpperCase() === String(b).toUpperCase()
++}
++
++/** The car id mapped to `uid` (case-insensitive, like the firmware), or null. */
++export function carForTag(str, uid) {
++  const map = parseRfidCars(str)
++  const key = Object.keys(map).find((k) => sameUid(k, uid))
++  return key === undefined ? null : map[key]
++}
+diff --git a/src/lib/kinetos/sessions.js b/src/lib/kinetos/sessions.js
+new file mode 100644
+index 0000000..0414772
+--- /dev/null
++++ b/src/lib/kinetos/sessions.js
+@@ -0,0 +1,145 @@
++// src/lib/kinetos/sessions.js
++// Pure helpers for the Kinetos charging-session log (GET /kinetos/sessions).
++//
++// The firmware serves a ';'-separated CSV:
++//   start;end;minutes;kwh;meter_start_kwh;meter_end_kwh;tag;user;car
++// start/end are local ISO times (YYYY-MM-DDTHH:MM:SS) or empty, tag is the
++// RFID UID, user the RFID user name, car a TeslaMate car number or empty.
++
++const REQUIRED = ['start', 'kwh']
++
++function num(v) {
++  if (v === undefined || v === null) return null
++  const s = String(v).trim()
++  if (s === '') return null
++  const n = Number(s.replace(',', '.'))
++  return Number.isFinite(n) ? n : null
++}
++
++/**
++ * Parse the session CSV. Columns are looked up by header name, so an added
++ * column does not shift the others. Returns null when the text is not a
++ * session log (no header — e.g. an HTML 404 page from stock firmware).
++ */
++export function parseSessionsCsv(text) {
++  if (typeof text !== 'string') return null
++  const lines = text.replace(/^﻿/, '').split(/\r?\n/)
++  const header = (lines.shift() ?? '').split(';').map((h) => h.trim().toLowerCase())
++  if (!REQUIRED.every((h) => header.includes(h))) return null
++  const col = (cells, name) => {
++    const i = header.indexOf(name)
++    return i === -1 ? '' : (cells[i] ?? '').trim()
++  }
++  const out = []
++  for (const line of lines) {
++    if (line.trim() === '') continue
++    const cells = line.split(';')
++    out.push({
++      start: col(cells, 'start'),
++      end: col(cells, 'end'),
++      minutes: num(col(cells, 'minutes')),
++      kwh: num(col(cells, 'kwh')),
++      meterStart: num(col(cells, 'meter_start_kwh')),
++      meterEnd: num(col(cells, 'meter_end_kwh')),
++      tag: col(cells, 'tag'),
++      user: col(cells, 'user'),
++      car: num(col(cells, 'car')),
++    })
++  }
++  return out
++}
++
++/** The session's reference time: start, else end ('' when neither is known). */
++export function sessionTime(s) {
++  return s?.start || s?.end || ''
++}
++
++/** Newest first. Local ISO strings sort lexicographically; undated go last. */
++export function sortNewestFirst(sessions) {
++  return [...(sessions ?? [])].sort((a, b) => {
++    const ta = sessionTime(a)
++    const tb = sessionTime(b)
++    if (ta === tb) return 0
++    if (!ta) return 1
++    if (!tb) return -1
++    return ta < tb ? 1 : -1
++  })
++}
++
++/** 'YYYY-MM' of the session, or '' when it has no usable time. */
++export function monthKey(s) {
++  const m = /^(\d{4}-\d{2})/.exec(sessionTime(s))
++  return m ? m[1] : ''
++}
++
++/** Distinct months present, newest first. */
++export function sessionMonths(sessions) {
++  const set = new Set((sessions ?? []).map(monthKey).filter(Boolean))
++  return [...set].sort().reverse()
++}
++
++/**
++ * Filter by month ('' = all) and tag (null = all, '' = sessions without a
++ * tag, i.e. started without RFID).
++ */
++export function filterSessions(sessions, { month = '', tag = null } = {}) {
++  return (sessions ?? []).filter(
++    (s) => (!month || monthKey(s) === month) && (tag === null || (s.tag ?? '') === tag),
++  )
++}
++
++const round3 = (n) => Math.round(n * 1000) / 1000
++
++/**
++ * Totals per tag, largest energy first: [{ tag, user, count, kwh }]. `user`
++ * is the most recent non-empty name logged for the tag.
++ */
++export function totalsByTag(sessions) {
++  const map = new Map()
++  for (const s of sortNewestFirst(sessions)) {
++    const tag = s.tag ?? ''
++    const t = map.get(tag) ?? { tag, user: '', count: 0, kwh: 0 }
++    t.count += 1
++    t.kwh += s.kwh ?? 0
++    if (!t.user && s.user) t.user = s.user
++    map.set(tag, t)
++  }
++  return [...map.values()]
++    .map((t) => ({ ...t, kwh: round3(t.kwh) }))
++    .sort((a, b) => b.kwh - a.kwh || a.tag.localeCompare(b.tag))
++}
++
++/** Grand total over the given sessions: { count, kwh }. */
++export function sessionTotal(sessions) {
++  const list = sessions ?? []
++  return { count: list.length, kwh: round3(list.reduce((sum, s) => sum + (s.kwh ?? 0), 0)) }
++}
++
++/** Distinct tags (for the filter), each with its latest user name. */
++export function sessionTags(sessions) {
++  return totalsByTag(sessions)
++    .map(({ tag, user }) => ({ tag, user }))
++    .sort((a, b) => (a.user || a.tag).localeCompare(b.user || b.tag))
++}
++
++/** 'YYYY-MM-DDTHH:MM:SS' → 'YYYY-MM-DD HH:MM'; '' stays ''. */
++export function formatSessionTime(iso) {
++  if (!iso) return ''
++  const m = /^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})/.exec(iso)
++  return m ? `${m[1]} ${m[2]}` : iso
++}
++
++/** Minutes → '45 min' / '2 h 05 min'; null → ''. */
++export function formatDuration(minutes) {
++  if (typeof minutes !== 'number' || !Number.isFinite(minutes) || minutes < 0) return ''
++  const total = Math.round(minutes)
++  const h = Math.floor(total / 60)
++  const m = total % 60
++  return h > 0 ? `${h} h ${String(m).padStart(2, '0')} min` : `${m} min`
++}
++
++/** kWh with up to 2 decimals ('' for null). */
++export function formatKwh(kwh) {
++  if (typeof kwh !== 'number' || !Number.isFinite(kwh)) return ''
++  return kwh.toFixed(2)
++}
 diff --git a/src/lib/kinetos/status.js b/src/lib/kinetos/status.js
 new file mode 100644
 index 0000000..97ee90c
@@ -5088,6 +5823,251 @@ index d3c5c62..4337a71 100644
  routes['/settings/emoncms'] = Emoncms
  
  // System pages — override the placeholders set above.
+diff --git a/src/routes/History.svelte b/src/routes/History.svelte
+index b19be6b..b2141f4 100644
+--- a/src/routes/History.svelte
++++ b/src/routes/History.svelte
+@@ -3,6 +3,7 @@
+   import { onMount } from 'svelte'
+   import { history_store } from '../lib/stores/history.js'
+   import { config_store } from '../lib/stores/config.js'
++  import { status_store } from '../lib/stores/status.js'
+   import { uisettings_store } from '../lib/stores/uisettings.js'
+   import { rfid_users_store } from '../lib/stores/rfid_users.js'
+   import { httpAPI } from '../lib/api/httpAPI.js'
+@@ -15,10 +16,19 @@
+   import { isKnownAdvisory } from '../lib/notifications/notifications.js'
+   import { formatTemp } from '../lib/temperature.js'
+   import { formatCost } from '../lib/cost.js'
++  import { showWriteError } from '../lib/alerts.js'
++  import {
++    parseSessionsCsv, sortNewestFirst, sessionMonths, filterSessions, totalsByTag,
++    sessionTotal, sessionTags, formatSessionTime, formatDuration, formatKwh,
++  } from '../lib/kinetos/sessions.js'
+   import Card from '../lib/components/ui/Card.svelte'
+   import Button from '../lib/components/ui/Button.svelte'
+   import ProgressBar from '../lib/components/ui/ProgressBar.svelte'
+   import LogList from '../lib/components/history/LogList.svelte'
++  import SessionList from '../lib/components/history/SessionList.svelte'
++  import Tabs from '../lib/components/ui/Tabs.svelte'
++  import Select from '../lib/components/ui/Select.svelte'
++  import Modal from '../lib/components/ui/Modal.svelte'
+ 
+   let phase = $state('loading')
+   let progress = $state(0)
+@@ -118,6 +128,108 @@
+     }
+   }
+ 
++  // ── Kinetos charging sessions (GET/DELETE /kinetos/sessions) ────────────
++  // button_action is the Kinetos-firmware marker in /config; stock firmware
++  // has no session log, so the page stays the plain event log there.
++  let hasSessions = $derived($config_store?.button_action !== undefined)
++  let tab = $state(0) // 0 event log, 1 charging sessions
++  let showSessions = $derived(hasSessions && tab === 1)
++
++  const ALL = '*'
++  let sessPhase = $state('idle') // idle | loading | ready | error
++  let sessions = $state([])
++  let month = $state(null) // null until loaded → newest month; '' = all months
++  let tagFilter = $state(ALL)
++  let pendingClear = $state(false)
++  let clearing = $state(false)
++
++  const sessionsUrl = (import.meta.env?.DEV ? '/api' : '') + '/kinetos/sessions'
++
++  // Full label "Name (TAG)"; `short` gives just the name (table rows, where
++  // the tag moves to the tooltip to keep the table narrow on phones).
++  function who(tag, user, short = false) {
++    if (!tag) return $_('kinetos.sessions.no_tag')
++    const name = user || $rfid_users_store.users[tag]
++    if (!name) return tag
++    return short ? name : `${name} (${tag})`
++  }
++
++  let months = $derived(sessionMonths(sessions))
++  let activeMonth = $derived(month ?? months[0] ?? '')
++  let monthOptions = $derived([
++    ...months.map((m) => ({ value: m, label: m })),
++    { value: '', label: $_('kinetos.sessions.all_months') },
++  ])
++  let tagOptions = $derived([
++    { value: ALL, label: $_('kinetos.sessions.all_users') },
++    ...sessionTags(sessions).map(({ tag, user }) => ({ value: tag, label: who(tag, user) })),
++  ])
++  let inMonth = $derived(filterSessions(sessions, { month: activeMonth }))
++  let shown = $derived(
++    sortNewestFirst(filterSessions(inMonth, { tag: tagFilter === ALL ? null : tagFilter })),
++  )
++  let sessionRows = $derived(
++    shown.map((s, i) => ({
++      key: `${s.start}|${s.end}|${i}`,
++      start: formatSessionTime(s.start) || '—',
++      end: formatSessionTime(s.end),
++      duration: formatDuration(s.minutes),
++      kwh: formatKwh(s.kwh),
++      who: who(s.tag, s.user, true),
++      tag: s.tag,
++      car: s.car ?? '',
++    })),
++  )
++  let sessionTotals = $derived(
++    totalsByTag(inMonth).map((t) => ({
++      key: t.tag || '-', who: who(t.tag, t.user), count: t.count, kwh: formatKwh(t.kwh),
++    })),
++  )
++  let grandTotal = $derived.by(() => {
++    const t = sessionTotal(inMonth)
++    return { count: t.count, kwh: formatKwh(t.kwh) }
++  })
++  let activeSession = $derived(
++    $status_store?.session_active
++      ? {
++          kwh: formatKwh($status_store.session_kwh ?? 0),
++          user: who($status_store.session_tag ?? '', ''),
++        }
++      : null,
++  )
++
++  async function loadSessions() {
++    sessPhase = 'loading'
++    const text = await serialQueue.add(() => httpAPI('GET', '/kinetos/sessions', null, 'txt'))
++    const parsed = parseSessionsCsv(text)
++    if (!parsed) {
++      sessPhase = 'error'
++      return
++    }
++    sessions = parsed
++    if (month !== null && month !== '' && !sessionMonths(parsed).includes(month)) month = null
++    sessPhase = 'ready'
++  }
++
++  function selectTab(i) {
++    tab = i
++    if (i === 1 && sessPhase === 'idle') loadSessions()
++  }
++
++  async function confirmClear() {
++    clearing = true
++    const res = await serialQueue.add(() => httpAPI('DELETE', '/kinetos/sessions', null, 'txt'))
++    clearing = false
++    pendingClear = false
++    if (!res || res === 'error') {
++      showWriteError()
++      return
++    }
++    month = null
++    tagFilter = ALL
++    loadSessions()
++  }
++
+   onMount(() => {
+     rfid_users_store.download()
+     load()
+@@ -127,14 +239,81 @@
+ <section class="p-4 lg:mx-auto lg:max-w-3xl">
+   <div class="mb-3 flex items-center gap-2">
+     <h1 class="flex-1 text-lg font-semibold text-text">{$_('screen.history')}</h1>
+-    {#if phase === 'ready' && rows.length > 0}
++    {#if !showSessions && phase === 'ready' && rows.length > 0}
+       <div class="w-32 shrink-0">
+         <Button label={$_('history.export_csv')} variant="ghost" onclick={exportCsv} />
+       </div>
+     {/if}
+   </div>
+ 
+-  {#if phase === 'loading'}
++  {#if hasSessions}
++    <div class="mb-3">
++      <Tabs
++        tabs={[{ label: $_('kinetos.sessions.tab_log') }, { label: $_('kinetos.sessions.tab_sessions') }]}
++        active={tab}
++        onchange={selectTab}
++      />
++    </div>
++  {/if}
++
++  {#if showSessions}
++    {#if activeSession}
++      <Card class="mb-3 flex items-center gap-3 px-4 py-3">
++        <span class="h-2 w-2 shrink-0 animate-pulse rounded-full bg-success"></span>
++        <span class="flex-1 text-sm text-text">{$_('kinetos.sessions.active')}</span>
++        <span class="text-sm tabular-nums text-text-dim">
++          {$_('kinetos.sessions.active_value', { values: activeSession })}
++        </span>
++      </Card>
++    {/if}
++    {#if sessPhase === 'loading' || sessPhase === 'idle'}
++      <Card class="flex flex-col items-center gap-3 px-6 py-12">
++        <p class="text-sm text-text-dim">{$_('kinetos.sessions.loading')}</p>
++      </Card>
++    {:else if sessPhase === 'error'}
++      <Card class="flex flex-col items-center gap-3 px-6 py-12 text-center">
++        <h2 class="text-sm font-semibold text-text">{$_('kinetos.sessions.error_title')}</h2>
++        <p class="text-xs text-text-dim">{$_('kinetos.sessions.error_body')}</p>
++        <div class="w-full max-w-xs"><Button label={$_('history.retry')} onclick={loadSessions} /></div>
++      </Card>
++    {:else}
++      {#if sessions.length > 0}
++        <div class="mb-3 grid grid-cols-2 gap-2">
++          <label class="text-xs text-text-dim">
++            {$_('kinetos.sessions.month')}
++            <span class="mt-1 block">
++              <Select options={monthOptions} value={activeMonth} onchange={(v) => (month = v)} />
++            </span>
++          </label>
++          <label class="text-xs text-text-dim">
++            {$_('kinetos.sessions.user')}
++            <span class="mt-1 block">
++              <Select options={tagOptions} value={tagFilter} onchange={(v) => (tagFilter = v)} />
++            </span>
++          </label>
++        </div>
++      {/if}
++      <SessionList
++        rows={sessionRows}
++        totals={sessionTotals}
++        total={grandTotal}
++        emptyText={$_(sessions.length > 0 ? 'kinetos.sessions.empty_filter' : 'kinetos.sessions.empty')}
++      />
++      <div class="mt-3 grid grid-cols-2 gap-2">
++        <a
++          href={sessionsUrl}
++          download="charging-sessions.csv"
++          class="block w-full rounded-2xl border border-border px-4 py-3 text-center text-sm font-semibold text-text"
++        >{$_('kinetos.sessions.download')}</a>
++        <Button
++          label={$_('kinetos.sessions.clear')}
++          variant="ghost"
++          disabled={sessions.length === 0}
++          onclick={() => (pendingClear = true)}
++        />
++      </div>
++    {/if}
++  {:else if phase === 'loading'}
+     <Card class="flex flex-col items-center gap-3 px-6 py-12">
+       <p class="text-sm text-text-dim">{$_('history.loading')}</p>
+       <div class="w-full max-w-xs"><ProgressBar value={progress} /></div>
+@@ -149,3 +328,19 @@
+     <LogList {rows} />
+   {/if}
+ </section>
++
++{#if hasSessions}
++  <Modal visible={pendingClear} closable={!clearing} onclose={() => (pendingClear = false)}>
++    <h2 class="mb-2 text-base font-semibold text-text">{$_('kinetos.sessions.clear_title')}</h2>
++    <p class="mb-4 text-sm text-text-dim">{$_('kinetos.sessions.clear_body')}</p>
++    <div class="flex gap-2">
++      <Button label={$_('kinetos.sessions.clear_yes')} disabled={clearing} onclick={confirmClear} />
++      <Button
++        label={$_('kinetos.sessions.clear_no')}
++        variant="ghost"
++        disabled={clearing}
++        onclick={() => (pendingClear = false)}
++      />
++    </div>
++  </Modal>
++{/if}
 diff --git a/src/routes/Monitoring.svelte b/src/routes/Monitoring.svelte
 index e9e2fc0..66dadb4 100644
 --- a/src/routes/Monitoring.svelte
@@ -5116,6 +6096,114 @@ index e9e2fc0..66dadb4 100644
      ...(showVehicle($status_store, $config_store)
        ? [{ group: vehicleMetrics($status_store, $config_store), expanded: desktop }]
        : []),
+diff --git a/src/routes/__tests__/History.test.js b/src/routes/__tests__/History.test.js
+index 084fc7b..cd1b59b 100644
+--- a/src/routes/__tests__/History.test.js
++++ b/src/routes/__tests__/History.test.js
+@@ -13,6 +13,8 @@ import { history_store } from '../../lib/stores/history.js'
+ import { config_store } from '../../lib/stores/config.js'
+ import { uisettings_store } from '../../lib/stores/uisettings.js'
+ import { rfid_users_store } from '../../lib/stores/rfid_users.js'
++import { status_store } from '../../lib/stores/status.js'
++import { uistates_store } from '../../lib/stores/uistates.js'
+ import History from '../History.svelte'
+ 
+ const LOGS = [
+@@ -105,3 +107,94 @@ describe('History', () => {
+     })
+   })
+ })
++
++const SESSIONS_CSV = [
++  'start;end;minutes;kwh;meter_start_kwh;meter_end_kwh;tag;user;car',
++  '2026-04-28T20:00:00;2026-04-28T22:00:00;120;14;100;114;AA11;Alice;1',
++  '2026-05-02T08:00:00;2026-05-02T09:30:00;90;6.25;114;120.25;CC33;Bob;',
++  '2026-05-20T18:00:00;2026-05-20T19:00:00;60;7.5;120.25;127.75;AA11;Alice;1',
++].join('\n') + '\n'
++
++describe('History — Kinetos charging sessions', () => {
++  let sessionsText
++  beforeEach(() => {
++    history_store.set(undefined)
++    httpAPI.mockReset()
++    uistates_store.resetAlertBox()
++    rfid_users_store.reset()
++    status_store.set({})
++    config_store.set({ button_action: 1 })
++    sessionsText = SESSIONS_CSV
++    httpAPI.mockImplementation((method, path) => {
++      if (path === '/kinetos/sessions') return Promise.resolve(method === 'DELETE' ? 'ok\n' : sessionsText)
++      if (path === '/logs') return Promise.resolve({ min: 1, max: 1 })
++      return Promise.resolve(LOGS)
++    })
++  })
++
++  async function openSessions() {
++    const utils = render(History)
++    await fireEvent.click(utils.getByText('kinetos.sessions.tab_sessions'))
++    await vi.waitFor(() => expect(utils.getByText('kinetos.sessions.totals')).toBeInTheDocument())
++    return utils
++  }
++
++  it('has no sessions tab on stock firmware', () => {
++    config_store.set({})
++    const { queryByText } = render(History)
++    expect(queryByText('kinetos.sessions.tab_sessions')).not.toBeInTheDocument()
++  })
++
++  it('loads the log lazily and shows the newest month, newest first', async () => {
++    const { getAllByText, queryByText, getByDisplayValue } = await openSessions()
++    expect(httpAPI).toHaveBeenCalledWith('GET', '/kinetos/sessions', null, 'txt')
++    expect(getByDisplayValue('2026-05')).toBeInTheDocument()
++    const starts = getAllByText(/^2026-0\d-\d\d \d\d:\d\d$/).map((e) => e.textContent)
++    expect(starts).toEqual(['2026-05-20 18:00', '2026-05-02 08:00'])
++    expect(queryByText('2026-04-28 20:00')).toBeNull()
++  })
++
++  it('totals per user for the selected month and filters by user', async () => {
++    const { getAllByText, getByDisplayValue, queryByText, getByText } = await openSessions()
++    // Totals: Alice 7.50, Bob 6.25, grand total 13.75 (2 sessions)
++    expect(getAllByText('7.50').length).toBeGreaterThan(0)
++    expect(getByText('13.75')).toBeInTheDocument()
++    await fireEvent.change(getByDisplayValue('kinetos.sessions.all_users'), { target: { value: 'CC33' } })
++    expect(queryByText('2026-05-20 18:00')).toBeNull()
++    expect(getByText('2026-05-02 08:00')).toBeInTheDocument()
++    await fireEvent.change(getByDisplayValue('2026-05'), { target: { value: '' } })
++    expect(getByText('27.75')).toBeInTheDocument()
++  })
++
++  it('offers the CSV as a download link', async () => {
++    const { getByText } = await openSessions()
++    const link = getByText('kinetos.sessions.download').closest('a')
++    expect(link.getAttribute('href')).toMatch(/\/kinetos\/sessions$/)
++    expect(link).toHaveAttribute('download')
++  })
++
++  it('clears the log only after confirmation', async () => {
++    const { getByText, queryByText } = await openSessions()
++    await fireEvent.click(getByText('kinetos.sessions.clear'))
++    expect(getByText('kinetos.sessions.clear_title')).toBeInTheDocument()
++    expect(httpAPI).not.toHaveBeenCalledWith('DELETE', '/kinetos/sessions', null, 'txt')
++    sessionsText = 'start;end;minutes;kwh;meter_start_kwh;meter_end_kwh;tag;user;car\n'
++    await fireEvent.click(getByText('kinetos.sessions.clear_yes'))
++    expect(httpAPI).toHaveBeenCalledWith('DELETE', '/kinetos/sessions', null, 'txt')
++    await vi.waitFor(() => expect(getByText('kinetos.sessions.empty')).toBeInTheDocument())
++    expect(queryByText('kinetos.sessions.clear_title')).toBeNull()
++  })
++
++  it('shows the error card when the log is not a session CSV', async () => {
++    sessionsText = '<html>Not found</html>'
++    const { getByText } = render(History)
++    await fireEvent.click(getByText('kinetos.sessions.tab_sessions'))
++    await vi.waitFor(() => expect(getByText('kinetos.sessions.error_title')).toBeInTheDocument())
++  })
++
++  it('shows the running session from the status', async () => {
++    status_store.set({ session_active: true, session_kwh: 3.2, session_tag: 'AA11' })
++    const { getByText } = await openSessions()
++    expect(getByText('kinetos.sessions.active')).toBeInTheDocument()
++  })
++})
 diff --git a/src/routes/__tests__/Monitoring.test.js b/src/routes/__tests__/Monitoring.test.js
 index 38f68ec..d2c7a66 100644
 --- a/src/routes/__tests__/Monitoring.test.js
@@ -5166,10 +6254,10 @@ index 20df39b..2dbaf51 100644
      const { getAllByRole } = render(Settings)
      const links = getAllByRole('link')
 diff --git a/src/routes/settings/About.svelte b/src/routes/settings/About.svelte
-index 1fafa61..9a56a61 100644
+index 1fafa61..e52eeb9 100644
 --- a/src/routes/settings/About.svelte
 +++ b/src/routes/settings/About.svelte
-@@ -6,6 +6,12 @@
+@@ -6,6 +6,19 @@
    import ConfigSection from '../../lib/components/config/ConfigSection.svelte'
    import ReadOnlyRow from '../../lib/components/config/ReadOnlyRow.svelte'
    import Icon from '../../lib/icons/Icon.svelte'
@@ -5179,10 +6267,17 @@ index 1fafa61..9a56a61 100644
 +
 +  const form = createConfigForm()
 +  const ss = form.saveState
++
++  // Kinetos firmware serves Prometheus metrics at /metrics (same login as the
++  // UI); button_action is the Kinetos-firmware marker in /config.
++  let isKinetos = $derived($config_store?.button_action !== undefined)
++  const metricsUrl = `${typeof location !== 'undefined' ? location.origin : ''}${
++    import.meta.env?.DEV ? '/api' : ''
++  }/metrics`
  
    const links = [
      { labelKey: 'config.about.docs', href: 'https://openevse.stoplight.io/docs/openevse-wifi-v4', icon: 'mdi:book-open-variant' },
-@@ -24,6 +30,28 @@
+@@ -24,6 +37,40 @@
      {/if}
    </ConfigSection>
  
@@ -5205,6 +6300,18 @@ index 1fafa61..9a56a61 100644
 +      {#if $config_store?.wifi_serial}
 +        <ReadOnlyRow label={$_('kinetos.identity.wifi_serial')} value={$config_store.wifi_serial} />
 +      {/if}
++    </ConfigSection>
++  {/if}
++
++  {#if isKinetos}
++    <ConfigSection title={$_('kinetos.metrics.title')}>
++      <p class="py-1 text-xs text-text-dim">{$_('kinetos.metrics.desc')}</p>
++      <a
++        href={metricsUrl}
++        target="_blank"
++        rel="noreferrer"
++        class="block break-all py-1 font-mono text-sm text-text hover:text-accent"
++      >{metricsUrl}</a>
 +    </ConfigSection>
 +  {/if}
 +
@@ -5365,7 +6472,7 @@ index 0000000..f2b9c97
 +  </ConfigSection>
 +</ConfigPage>
 diff --git a/src/routes/settings/Display.svelte b/src/routes/settings/Display.svelte
-index 6ddb2bd..3a67c19 100644
+index 6ddb2bd..873015f 100644
 --- a/src/routes/settings/Display.svelte
 +++ b/src/routes/settings/Display.svelte
 @@ -9,6 +9,7 @@
@@ -5376,15 +6483,17 @@ index 6ddb2bd..3a67c19 100644
  
    const form = createConfigForm()
    const ss = form.saveState
-@@ -29,6 +30,7 @@
+@@ -29,6 +30,9 @@
    let hasStandby = $derived('tft_standby_brightness' in cfg)
    let hasTimeout = $derived('lcd_backlight_timeout' in cfg)
    let hasLcdType = $derived('lcd_type' in cfg)
 +  let hasSplash = $derived('lcd_splash' in cfg)
++  let displayTopic = $derived(`${cfg.mqtt_topic || 'openevse'}/display/set`)
++  const displayExample = '{"line1":"Hello","line2":"Welcome","time":30}'
  
    // On-device LVGL panel theme (config key `tft_theme`) — distinct from the web
    // UI's own site theme. Values mirror the GUI's [data-theme] tokens so the
-@@ -185,6 +187,23 @@
+@@ -185,6 +189,31 @@
    </ConfigSection>
    {/if}
  
@@ -5402,6 +6511,14 @@ index 6ddb2bd..3a67c19 100644
 +          onchange={(v) => form.saveField('lcd_splash', v)}
 +        />
 +      </FormField>
++      <!-- Kinetos: messages pushed over MQTT (firmware kinetos_features.cpp). -->
++      <div class="py-3">
++        <span class="text-sm text-text">{$_('kinetos.display.message')}</span>
++        <p class="mt-1 text-xs text-text-dim">
++          {$_('kinetos.display.message_desc', { values: { topic: displayTopic } })}
++        </p>
++        <code class="mt-1.5 block break-all rounded bg-surface-3 px-2 py-1 font-mono text-xs text-text">{displayExample}</code>
++      </div>
 +    </ConfigSection>
 +  {/if}
 +
@@ -5409,42 +6526,111 @@ index 6ddb2bd..3a67c19 100644
      <ConfigSection title={$_('config.display.lcd')}>
        <FormField
 diff --git a/src/routes/settings/Evse.svelte b/src/routes/settings/Evse.svelte
-index ea5d3b3..a954727 100644
+index ea5d3b3..83da325 100644
 --- a/src/routes/settings/Evse.svelte
 +++ b/src/routes/settings/Evse.svelte
-@@ -3,6 +3,9 @@
+@@ -3,6 +3,10 @@
    import { hardMaxCurrent } from '../../lib/utils.js'
    import { _ } from 'svelte-i18n'
    import { config_store } from '../../lib/stores/config.js'
 +  import { status_store } from '../../lib/stores/status.js'
 +  import { fxOptions } from '../../lib/kinetos/fx.js'
 +  import { formatPvShare } from '../../lib/kinetos/status.js'
++  import { buttonActionOptions, isValidOnePhaseLimit, ONE_PHASE_LIMIT } from '../../lib/kinetos/charger.js'
    import { createConfigForm } from '../../lib/config/configForm.svelte.js'
    import ConfigPage from '../../lib/components/config/ConfigPage.svelte'
    import ConfigSection from '../../lib/components/config/ConfigSection.svelte'
-@@ -36,6 +39,10 @@
+@@ -36,6 +40,23 @@
      { value: '2', label: $_('config.evse.service_l2') },
    ])
  
 +  // Kinetos firmware LED ring options; each row is gated on its own key so
 +  // stock firmware (no such keys) renders this page unchanged.
 +  let fxOpts = $derived(fxOptions($_, $config_store?.led_fx_charge))
++  let buttonOpts = $derived(buttonActionOptions($_))
++  let showLed = $derived(
++    $config_store?.led_brightness !== undefined ||
++    $config_store?.led_pv_enabled !== undefined ||
++    $config_store?.wled_enabled !== undefined,
++  )
++
++  let onePhaseInvalid = $state(false)
++  function saveOnePhase(v) {
++    const n = v ?? 0
++    onePhaseInvalid = !isValidOnePhaseLimit(n)
++    if (!onePhaseInvalid) form.saveField('max_current_1p', n)
++  }
 +
  </script>
  
  <ConfigPage title={$_('config.pages.evse')}>
-@@ -206,6 +213,10 @@
+@@ -58,6 +79,33 @@
+         ? `${$config_store.max_current_hard} A`
+         : ''}
+     />
++    {#if $config_store?.max_current_1p !== undefined}
++      <FormField
++        label={$_('kinetos.onephase.limit')}
++        description={$_('kinetos.onephase.limit_desc')}
++        status={$ss.max_current_1p ?? 'idle'}
++      >
++        <div class="flex items-center gap-2">
++          <NumberInput
++            value={$config_store.max_current_1p}
++            min={ONE_PHASE_LIMIT.min}
++            max={ONE_PHASE_LIMIT.max}
++            revert={form.revert}
++            onchange={saveOnePhase}
++          />
++          <span class="text-sm text-text-dim">A</span>
++        </div>
++        {#if onePhaseInvalid}
++          <p class="mt-1 text-xs text-error">{$_('kinetos.onephase.invalid')}</p>
++        {/if}
++      </FormField>
++      {#if $config_store.max_current_1p > 0 && $status_store?.limit_1p_active !== undefined}
++        <ReadOnlyRow
++          label={$_('kinetos.onephase.active')}
++          value={$_($status_store.limit_1p_active ? 'kinetos.onephase.active_on' : 'kinetos.onephase.active_off')}
++        />
++      {/if}
++    {/if}
+     {#if $config_store?.voltage !== undefined}
+       <FormField
+         label={$_('config.evse.voltage')}
+@@ -193,6 +241,20 @@
+         />
+       </FormField>
+     {/if}
++    <!-- Kinetos firmware only: what a short press of the front button does. -->
++    {#if $config_store?.button_action !== undefined}
++      <FormField
++        label={$_('kinetos.button.action')}
++        description={$_('kinetos.button.action_desc')}
++        status={$ss.button_action ?? 'idle'}
++      >
++        <Select
++          options={buttonOpts}
++          value={String($config_store.button_action)}
++          onchange={(v) => form.saveField('button_action', Number(v))}
++        />
++      </FormField>
++    {/if}
+     <FormField
+       label={$_('config.evse.start_window')}
+       description={$_('config.evse.start_window_desc')}
+@@ -206,6 +268,10 @@
          onchange={(v) => form.saveField('scheduler_start_window', v)}
        />
      </FormField>
 +  </ConfigSection>
 +
-+  {#if $config_store?.led_brightness !== undefined || $config_store?.led_pv_enabled !== undefined}
++  {#if showLed}
 +  <ConfigSection title={$_('kinetos.led.title')}>
      {#if $config_store?.led_brightness !== undefined}
        <FormField
          label={$_('config.evse.led_brightness')}
-@@ -220,7 +231,46 @@
+@@ -220,7 +286,65 @@
          />
        </FormField>
      {/if}
@@ -5485,6 +6671,25 @@ index ea5d3b3..a954727 100644
 +          onchange={(v) => form.saveField('lightshow_enabled', v)}
 +        />
 +      </FormField>
++    {/if}
++    {#if $config_store?.wled_enabled !== undefined}
++      <FormField
++        label={$_('kinetos.led.wled')}
++        description={$_('kinetos.led.wled_desc')}
++        status={$ss.wled_enabled ?? 'idle'}
++      >
++        <Toggle
++          checked={!!$config_store?.wled_enabled}
++          label={$_('kinetos.led.wled')}
++          onchange={(v) => form.saveField('wled_enabled', v)}
++        />
++      </FormField>
++      {#if $config_store?.wled_enabled && $status_store?.wled_on !== undefined}
++        <ReadOnlyRow
++          label={$_('kinetos.led.wled_on')}
++          value={$_($status_store.wled_on ? 'kinetos.led.wled_active' : 'kinetos.led.wled_idle')}
++        />
++      {/if}
 +    {/if}
    </ConfigSection>
 +  {/if}
@@ -5612,6 +6817,97 @@ index a2068a4..35d3461 100644
        <FormField
          label={$_('config.mqtt.vrms')}
          description={$_('config.mqtt.vrms_desc')}
+diff --git a/src/routes/settings/Rfid.svelte b/src/routes/settings/Rfid.svelte
+index 71b5c28..11cfb60 100644
+--- a/src/routes/settings/Rfid.svelte
++++ b/src/routes/settings/Rfid.svelte
+@@ -12,10 +12,12 @@
+   import { showWriteError } from '../../lib/alerts.js'
+   import { httpAPI } from '../../lib/api/httpAPI.js'
+   import { parseTags, serializeTags, addTag, removeTag } from '../../lib/config/rfid.js'
++  import { carForTag, setCarForTag } from '../../lib/kinetos/rfidCars.js'
+   import ConfigPage from '../../lib/components/config/ConfigPage.svelte'
+   import ConfigSection from '../../lib/components/config/ConfigSection.svelte'
+   import Button from '../../lib/components/ui/Button.svelte'
+   import IconButton from '../../lib/components/ui/IconButton.svelte'
++  import NumberInput from '../../lib/components/ui/NumberInput.svelte'
+   import RfidUserModal from '../../lib/components/config/RfidUserModal.svelte'
+ 
+   const form = createConfigForm()
+@@ -27,7 +29,11 @@
+   let scanWaiting = $derived($uistates_store?.rfid_waiting ?? 0)
+   let alreadyRegistered = $derived(scanned !== '' && tags.includes(scanned))
+ 
+-  let labsOn = $derived(!!$uisettings_store?.dev_features)
++  // Kinetos firmware: rfid_cars maps a tag to a TeslaMate car, and the
++  // firmware serves /rfid/users, so user names need no Labs switch there.
++  let hasCars = $derived($config_store?.rfid_cars !== undefined)
++  let labsOn = $derived(!!$uisettings_store?.dev_features || hasCars)
++  let carInvalid = $state(null) // uid whose car entry was rejected
+   let editingUid = $state(null)
+   let editingInitial = $state('')
+   let editBusy = $state(false)
+@@ -48,11 +54,21 @@
+   function register() {
+     if (scanned) saveTags(addTag(tags, scanned))
+   }
+-  function remove(tag) {
+-    saveTags(removeTag(tags, tag))
++  // One key per request: the tag list first, then (if needed) the car map.
++  async function remove(tag) {
++    const ok = await saveTags(removeTag(tags, tag))
++    if (ok && hasCars && carForTag($config_store?.rfid_cars, tag) !== null) {
++      await form.saveField('rfid_cars', setCarForTag($config_store.rfid_cars, tag, null))
++    }
+   }
+-  function removeAll() {
+-    saveTags([])
++  async function removeAll() {
++    const ok = await saveTags([])
++    if (ok && hasCars && $config_store?.rfid_cars) await form.saveField('rfid_cars', '')
++  }
++  function saveCar(tag, car) {
++    const next = setCarForTag($config_store?.rfid_cars ?? '', tag, car)
++    carInvalid = next === null ? tag : null
++    if (next !== null && next !== ($config_store?.rfid_cars ?? '')) form.saveField('rfid_cars', next)
+   }
+ 
+   function openNameEditor(uid) {
+@@ -148,6 +164,24 @@
+                   </button>
+                 {/if}
+               {/if}
++              {#if hasCars}
++                <label class="mt-1.5 flex items-center gap-2 text-xs text-text-dim">
++                  <span>{$_('kinetos.rfid.car')}</span>
++                  <span class="w-20">
++                    <NumberInput
++                      value={carForTag($config_store.rfid_cars, tag)}
++                      min={1}
++                      max={20}
++                      placeholder="–"
++                      revert={form.revert}
++                      onchange={(v) => saveCar(tag, v)}
++                    />
++                  </span>
++                </label>
++                {#if carInvalid === tag}
++                  <p class="mt-1 text-xs text-error">{$_('kinetos.rfid.car_invalid')}</p>
++                {/if}
++              {/if}
+             </div>
+             {#if labsOn && $rfid_users_store.users[tag]}
+               <IconButton
+@@ -159,6 +193,9 @@
+             <IconButton icon="mdi:trash-can-outline" label={$_('config.rfid.remove')} onclick={() => remove(tag)} />
+           </div>
+         {/each}
++        {#if hasCars}
++          <p class="mt-1 text-xs text-text-dim">{$_('kinetos.rfid.car_desc')}</p>
++        {/if}
+         <div class="mt-2">
+           <Button label={$_('config.rfid.remove_all')} variant="ghost" onclick={removeAll} />
+         </div>
 diff --git a/src/routes/settings/Terminal.svelte b/src/routes/settings/Terminal.svelte
 index b9aa03d..a3f5329 100644
 --- a/src/routes/settings/Terminal.svelte
@@ -5752,6 +7048,27 @@ index d15fa63..f266b61 100644
    {#if src === 1}
      <ConfigSection title={$_('config.vehicle.src_tesla')}>
        <FormField label={$_('config.vehicle.range_unit')} status={$ss.mqtt_vehicle_range_miles ?? 'idle'}>
+diff --git a/src/routes/settings/__tests__/About.test.js b/src/routes/settings/__tests__/About.test.js
+index edca7fc..50eb6ca 100644
+--- a/src/routes/settings/__tests__/About.test.js
++++ b/src/routes/settings/__tests__/About.test.js
+@@ -32,3 +32,16 @@ describe('About page', () => {
+     expect(hrefs.some((h) => h && h.includes('openevse'))).toBe(true)
+   })
+ })
++
++describe('About page — Kinetos', () => {
++  it('hides the Prometheus hint on stock firmware', () => {
++    const { queryByText } = render(About)
++    expect(queryByText('kinetos.metrics.title')).not.toBeInTheDocument()
++  })
++  it('shows the /metrics URL on Kinetos firmware', () => {
++    config_store.set({ firmware: '7.1.3', version: 'v5.2.0-dev-kinetos.18', button_action: 1 })
++    const { getByText, getAllByRole } = render(About)
++    expect(getByText('kinetos.metrics.title')).toBeInTheDocument()
++    expect(getAllByRole('link').some((a) => a.getAttribute('href').endsWith('/metrics'))).toBe(true)
++  })
++})
 diff --git a/src/routes/settings/__tests__/Dimming.test.js b/src/routes/settings/__tests__/Dimming.test.js
 new file mode 100644
 index 0000000..75dc701
@@ -5859,8 +7176,30 @@ index 0000000..75dc701
 +    expect(await findByRole('alert')).toHaveTextContent(/^kinetos\.dimming\.test_failed$/)
 +  })
 +})
+diff --git a/src/routes/settings/__tests__/Display.test.js b/src/routes/settings/__tests__/Display.test.js
+index 755e3f6..f499814 100644
+--- a/src/routes/settings/__tests__/Display.test.js
++++ b/src/routes/settings/__tests__/Display.test.js
+@@ -135,3 +135,17 @@ describe('Display page', () => {
+     expect(httpAPI).toHaveBeenCalledWith('POST', '/config', JSON.stringify({ tft_12h_clock: true }))
+   })
+ })
++
++describe('Display page — Kinetos MQTT messages', () => {
++  it('shows the display/set hint next to the start-up text', () => {
++    config_store.set({ lcd_splash: 'Kinetos', mqtt_topic: 'wallbox' })
++    const { getByText } = render(Display)
++    expect(getByText('kinetos.display.message')).toBeInTheDocument()
++    expect(getByText('{"line1":"Hello","line2":"Welcome","time":30}')).toBeInTheDocument()
++  })
++  it('has no hint on firmware without lcd_splash', () => {
++    config_store.set({ lcd_type: 'rgb' })
++    const { queryByText } = render(Display)
++    expect(queryByText('kinetos.display.message')).toBeNull()
++  })
++})
 diff --git a/src/routes/settings/__tests__/Evse.test.js b/src/routes/settings/__tests__/Evse.test.js
-index ef0d927..b8d5e42 100644
+index ef0d927..e0072e6 100644
 --- a/src/routes/settings/__tests__/Evse.test.js
 +++ b/src/routes/settings/__tests__/Evse.test.js
 @@ -12,6 +12,7 @@ vi.mock('../../../lib/api/httpAPI.js', () => ({ httpAPI: vi.fn(() => Promise.res
@@ -5871,7 +7210,7 @@ index ef0d927..b8d5e42 100644
  import { uistates_store } from '../../../lib/stores/uistates.js'
  import { uisettings_store } from '../../../lib/stores/uisettings.js'
  import Evse from '../Evse.svelte'
-@@ -139,3 +140,33 @@ describe('EVSE page', () => {
+@@ -139,3 +140,82 @@ describe('EVSE page', () => {
      expect(queryByText('config.evse.energy_slider_max')).not.toBeInTheDocument()
    })
  })
@@ -5903,6 +7242,55 @@ index ef0d927..b8d5e42 100644
 +    status_store.set({ pv_share: -1 })
 +    const { getByText } = render(Evse)
 +    expect(getByText('–')).toBeInTheDocument()
++  })
++})
++
++describe('EVSE page — Kinetos charger extras', () => {
++  it('hides button action, one-phase limit and WLED on stock firmware', () => {
++    config_store.set({ ...BASE, button_enabled: true, led_brightness: 128 })
++    status_store.set({})
++    const { queryByText } = render(Evse)
++    expect(queryByText('kinetos.button.action')).not.toBeInTheDocument()
++    expect(queryByText('kinetos.onephase.limit')).not.toBeInTheDocument()
++    expect(queryByText('kinetos.led.wled')).not.toBeInTheDocument()
++  })
++
++  it('saves the front button action as a number', async () => {
++    config_store.set({ ...BASE, button_enabled: true, button_action: 1 })
++    const { getByDisplayValue } = render(Evse)
++    await fireEvent.change(getByDisplayValue('kinetos.button.action_1'), { target: { value: '2' } })
++    expect(httpAPI).toHaveBeenCalledWith('POST', '/config', JSON.stringify({ button_action: 2 }))
++  })
++
++  it('saves the one-phase limit and rejects out-of-range values', async () => {
++    config_store.set({ ...BASE, max_current_1p: 7 })
++    const { getByDisplayValue, getByText, queryByText } = render(Evse)
++    const input = getByDisplayValue('7')
++    await fireEvent.input(input, { target: { value: '40' } })
++    await fireEvent.change(input)
++    expect(getByText('kinetos.onephase.invalid')).toBeInTheDocument()
++    expect(httpAPI).not.toHaveBeenCalled()
++    await fireEvent.input(input, { target: { value: '20' } })
++    await fireEvent.change(input)
++    expect(httpAPI).toHaveBeenCalledWith('POST', '/config', JSON.stringify({ max_current_1p: 20 }))
++    expect(queryByText('kinetos.onephase.invalid')).not.toBeInTheDocument()
++  })
++
++  it('shows the live one-phase limit state when a limit is set', () => {
++    config_store.set({ ...BASE, max_current_1p: 20 })
++    status_store.set({ limit_1p_active: true })
++    const { getByText } = render(Evse)
++    expect(getByText('kinetos.onephase.active_on')).toBeInTheDocument()
++  })
++
++  it('shows the WLED toggle in the LED ring section with its live state', async () => {
++    config_store.set({ ...BASE, wled_enabled: true })
++    status_store.set({ wled_on: true })
++    const { getByLabelText, getByText } = render(Evse)
++    expect(getByText('kinetos.led.title')).toBeInTheDocument()
++    expect(getByText('kinetos.led.wled_active')).toBeInTheDocument()
++    await fireEvent.click(getByLabelText('kinetos.led.wled'))
++    expect(httpAPI).toHaveBeenCalledWith('POST', '/config', JSON.stringify({ wled_enabled: false }))
 +  })
 +})
 diff --git a/src/routes/settings/__tests__/Modbus.test.js b/src/routes/settings/__tests__/Modbus.test.js
@@ -5980,6 +7368,62 @@ index 375ead8..f20881d 100644
 +    const { getByLabelText } = render(Mqtt)
 +    await fireEvent.click(getByLabelText('kinetos.mqtt.ha_discovery'))
 +    expect(httpAPI).toHaveBeenCalledWith('POST', '/config', JSON.stringify({ ha_discovery_enabled: false }))
++  })
++})
+diff --git a/src/routes/settings/__tests__/Rfid.test.js b/src/routes/settings/__tests__/Rfid.test.js
+index eedb860..740366a 100644
+--- a/src/routes/settings/__tests__/Rfid.test.js
++++ b/src/routes/settings/__tests__/Rfid.test.js
+@@ -112,3 +112,51 @@ describe('RFID page', () => {
+     })
+   })
+ })
++
++describe('RFID page — Kinetos TeslaMate car per tag', () => {
++  it('has no car field on stock firmware', () => {
++    config_store.set({ rfid_storage: 'AA11,BB22' })
++    const { queryByText } = render(Rfid)
++    expect(queryByText('kinetos.rfid.car')).not.toBeInTheDocument()
++  })
++
++  it('shows the mapped car per tag and the hint', () => {
++    config_store.set({ rfid_storage: 'AA11,BB22', rfid_cars: 'aa11=2' })
++    const { getAllByLabelText, getByText } = render(Rfid)
++    const inputs = getAllByLabelText('kinetos.rfid.car')
++    expect(inputs).toHaveLength(2)
++    expect(inputs[0]).toHaveValue(2)
++    expect(inputs[1]).toHaveValue(null)
++    expect(getByText('kinetos.rfid.car_desc')).toBeInTheDocument()
++  })
++
++  it('writes rfid_cars as one key when a car is set', async () => {
++    config_store.set({ rfid_storage: 'AA11,BB22', rfid_cars: 'AA11=2' })
++    const { getAllByLabelText } = render(Rfid)
++    const input = getAllByLabelText('kinetos.rfid.car')[1]
++    await fireEvent.input(input, { target: { value: '3' } })
++    await fireEvent.change(input)
++    expect(httpAPI).toHaveBeenCalledWith('POST', '/config', JSON.stringify({ rfid_cars: 'AA11=2;BB22=3' }))
++  })
++
++  it('rejects an out-of-range car id without writing', async () => {
++    config_store.set({ rfid_storage: 'AA11', rfid_cars: '' })
++    const { getByLabelText, getByText } = render(Rfid)
++    const input = getByLabelText('kinetos.rfid.car')
++    await fireEvent.input(input, { target: { value: '99' } })
++    await fireEvent.change(input)
++    expect(getByText('kinetos.rfid.car_invalid')).toBeInTheDocument()
++    expect(httpAPI).not.toHaveBeenCalledWith('POST', '/config', expect.anything())
++  })
++
++  it('drops the car mapping after removing its tag, one key per request', async () => {
++    config_store.set({ rfid_storage: 'AA11,BB22', rfid_cars: 'AA11=2;BB22=3' })
++    const { getAllByLabelText } = render(Rfid)
++    await fireEvent.click(getAllByLabelText('config.rfid.remove')[0])
++    await vi.waitFor(() => {
++      expect(httpAPI).toHaveBeenCalledWith('POST', '/config', JSON.stringify({ rfid_cars: 'BB22=3' }))
++    })
++    const posts = httpAPI.mock.calls.filter(([m, u]) => m === 'POST' && u === '/config').map(([, , b]) => b)
++    expect(posts).toEqual([JSON.stringify({ rfid_storage: 'BB22' }), JSON.stringify({ rfid_cars: 'BB22=3' })])
 +  })
 +})
 diff --git a/src/routes/settings/__tests__/Terminal.test.js b/src/routes/settings/__tests__/Terminal.test.js

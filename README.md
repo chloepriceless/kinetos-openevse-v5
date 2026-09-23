@@ -1,14 +1,20 @@
 # Kinetos OpenEVSE V5
 
 Eigene Firmware für **Kinetos-Wallboxen** (Power Rock, Elektronik von Bond Electronics mit
-WT32-ETH01) auf Basis von **OpenEVSE v5** – mit LAN, eichrechtskonformem MID-Zähler (3 Phasen),
-smart1®-Modbus-TCP, §14a EnWG, Home Assistant und TeslaMate.
+WT32-ETH01) auf Basis von **OpenEVSE** (aktueller master) – mit LAN, MID-Zähler (3 Phasen),
+smart1®-Modbus-TCP, §14a EnWG, Load Sharing, Home Assistant, WLED und TeslaMate.
+
+> **Eichrecht:** Der MID-Zähler ist geeicht, die Box ist damit aber **nicht eichrechtskonform**
+> (dafür bräuchte die ganze Station eine Zulassung und signierte Messwerte). Öffentlich pro kWh
+> abrechnen darf man damit nicht.
 
 > *English summary:* Kinetos went bankrupt and its wallboxes are stuck on a modified OpenEVSE
 > WiFi firmware 4.1.4 that tools like evcc reject. Stock OpenEVSE loses the MID meter readings
 > (0 A / 0 kWh) and needs the right board pins. This repository documents the hardware and the
 > original firmware (pins, Modbus meter map, smart1 register map), provides a tool to back up the
-> flash over LAN without opening the box, and builds OpenEVSE v5.1.5 with a Kinetos board layer.
+> flash over LAN without opening the box, and builds current OpenEVSE master with a Kinetos board
+> layer (MID meter, §14a dimming, Modbus TCP, display and LED features). Ready-made firmware is on the
+> [Releases](../../releases) page; the box then offers updates from there itself.
 > Documentation is in German; the specs tables in `docs/SPECS.md` are mostly self-explanatory.
 
 ## Inhalt
@@ -40,6 +46,19 @@ jeder sein eigenes Gerät.
 - Einstellungen direkt in der normalen OpenEVSE-Oberfläche (Monitoring, Energy → Grid dimming,
   Connectivity → Modbus TCP, Charger → LED, MQTT → Home Assistant, Vehicle → TeslaMate), nur Englisch
 - Absturz-Diagnose (Panic-Trap im RTC-Speicher), Roh-Eingänge, Zählerstatistik
+- Display wie im Original (Leistung in kW aus dem MID-Zähler, Animationen), **Starttext frei einstellbar**,
+  Nachrichten aufs Display per MQTT (`<topic>/display/set`)
+- Zähler-Übergabe an den Laderegler wie im Original (`$F2`/`$T0`/`$T1`) – der Regler kennt Strom und Energie
+- **Ladeprotokoll** pro Ladevorgang mit RFID-Karte, Nutzer und kWh aus dem MID-Zähler (History → Charging sessions, CSV)
+- RFID-Karte → TeslaMate-Auto (optional), eigene Stromgrenze bei 1-phasigem Laden
+- Front-Taster: kurz = Start/Pause oder Boost, 1–2 s = Netzwerk-Info
+- LED-Ring: Light Show, Nachtabsenkung 21–7 Uhr, **WLED-kompatible API** (WLED-App, HA-WLED-Integration)
+- Load Sharing mit **Live-Gruppenbudget per MQTT** (z. B. aus dem Hausanschluss-Zähler)
+- EVSE-ID wie im Original (`DE*KIG*E…`, änderbar) – Achtung: `DE*KIG` ist nicht (mehr) beim BDEW registriert
+- **Prometheus**-Metriken unter `/metrics`
+- **Updates direkt aus diesem Repo** (Settings → Firmware)
+- Einstellungen werden zusätzlich im Dateisystem gesichert und bei einem Ladefehler automatisch wiederhergestellt
+- Migration von Einstellungen der Original-Kinetos-Firmware und älterer Revisionen
 
 ## Schnellstart
 
@@ -50,15 +69,17 @@ curl -u admin:PASS -F firmware=@kinetos-dumper.bin http://WALLBOX/update
 curl http://WALLBOX/flash -o kinetos-full-4MB.bin     # zweimal, SHA256 vergleichen
 curl http://WALLBOX/revert                            # zurück auf Kinetos
 
-# 2. Konfiguration sichern (wird beim Umstieg teilweise nicht übernommen)
+# 2. Konfiguration sichern. Passwörter (WLAN, MQTT) zeigt die Box nicht an – vorher notieren!
 curl -u admin:PASS http://WALLBOX/config -o config-before.json
 
-# 3. Firmware bauen (PlatformIO + Node.js) und flashen
-cd firmware && ./build-master.sh        # Rev 9+ (OpenEVSE master); ./build.sh = alte v5.1.5-Basis
-curl -u admin:PASS -F firmware=@out/kinetos-openevse-v5.2.0-dev-kinetos.15.bin http://WALLBOX/update
+# 3. Firmware flashen: fertige Datei von der Releases-Seite …
+curl -u admin:PASS -F firmware=@kinetos-v5-v5.2.0-dev-kinetos.18.bin http://WALLBOX/update
+#    … oder selbst bauen (PlatformIO + Node.js)
+cd firmware && ./build-master.sh        # Ergebnis: out/kinetos-v5-<version>.bin
 ```
 
-Danach Web-Login, WLAN und MQTT prüfen (siehe `docs/PAPER.md`, Kap. 6.2).
+Danach Web-Login, WLAN und MQTT prüfen (siehe `docs/PAPER.md`, Kap. 6.2). Spätere Updates bietet
+die Box selbst an (Settings → Firmware), sie kommen aus den Releases dieses Repos.
 Zurück zur Original-Firmware: das eigene gesicherte `app0`-Image über `/update` flashen.
 
 ## Hinweise

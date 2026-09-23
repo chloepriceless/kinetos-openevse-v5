@@ -3,10 +3,10 @@
 #   upstream master (pinned) + Kinetos board / SDM meter (PR1) + grid dimming §14a (PR2)
 #   + Modbus TCP / smart1 (PR3) + Kinetos extras (LED PV share, HA discovery, panic trap,
 #   settings migration from rev <= 8) + Kinetos page in gui-nightshift (English only).
-# Output: out/kinetos-openevse-<version>.bin (flash via the wallbox's /update page)
+# Output: out/kinetos-v5-<version>.bin (release assets must start with the buildenv for the update check) (flash via the wallbox's /update page)
 set -euo pipefail
 UPSTREAM="${UPSTREAM:-a3816295}"
-VERSION="${VERSION:-v5.2.0-dev-kinetos.15}"
+VERSION="${VERSION:-v5.2.0-dev-kinetos.18}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 WORK="${WORK:-$HERE/.work-master}"
 GIT=(git -c user.name=build -c user.email=build@localhost)
@@ -37,6 +37,6 @@ if command -v pio >/dev/null; then PIO=(pio); else PIO=(uv tool run --from platf
 "${GIT[@]}" add -A src && "${GIT[@]}" commit -qm "generated headers" --allow-empty
 "${PIO[@]}" run -e kinetos-v5
 mkdir -p "$HERE/out"
-cp .pio/build/kinetos-v5/firmware.bin "$HERE/out/kinetos-openevse-$VERSION.bin"
-cp .pio/build/kinetos-v5/firmware.elf "$HERE/out/kinetos-openevse-$VERSION.elf"
-sha256sum "$HERE/out/kinetos-openevse-$VERSION.bin"
+cp .pio/build/kinetos-v5/firmware.bin "$HERE/out/kinetos-v5-$VERSION.bin"
+cp .pio/build/kinetos-v5/firmware.elf "$HERE/out/kinetos-v5-$VERSION.elf"
+sha256sum "$HERE/out/kinetos-v5-$VERSION.bin"

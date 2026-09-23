@@ -583,16 +583,17 @@ index 1b50a943..3afb045f 100644
 +  -D KINETOS_EXTRAS
 +  -Wl,--wrap=esp_panic_handler
 diff --git a/src/LedManagerTask.cpp b/src/LedManagerTask.cpp
-index 33f3a774..961455ae 100644
+index 33f3a774..9b6fb4c9 100644
 --- a/src/LedManagerTask.cpp
 +++ b/src/LedManagerTask.cpp
-@@ -29,6 +29,13 @@
+@@ -29,6 +29,14 @@
  #include "debug.h"
  #include "emonesp.h"
  #include "LedManagerTask.h"
 +#ifdef KINETOS_EXTRAS
 +#include "kinetos/kinetos_led.h"
 +#include "kinetos/kinetos_extras.h"
++#include "kinetos/kinetos_wled.h"
 +#include "lcd.h"
 +#else
 +#define kinetos_night_brightness(b) (b)
@@ -600,7 +601,7 @@ index 33f3a774..961455ae 100644
  
  #if defined(NEO_PIXEL_PIN) && defined(NEO_PIXEL_LENGTH) && !defined(ENABLE_WS2812FX)
  #include <Adafruit_NeoPixel.h>
-@@ -315,17 +322,36 @@ unsigned long LedManagerTask::loop(MicroTasks::WakeReason reason)
+@@ -315,17 +323,45 @@ unsigned long LedManagerTask::loop(MicroTasks::WakeReason reason)
        DBUGF("ChargeCurrent: %d ", _evse->getChargeCurrent());
        DBUGF("MaxHWCurrent: %d ", _evse->getMaxHardwareCurrent());
        if (this->brightness == 0){
@@ -617,6 +618,15 @@ index 33f3a774..961455ae 100644
            isCharging = _evse->isCharging();
            isError = _evse->isError();
 +#if defined(KINETOS_EXTRAS) && defined(ENABLE_WS2812FX)
++          // WLED API has taken over the ring (errors still show)
++          {
++            uint32_t wcol; uint8_t wmode, wbri; uint16_t wspeed;
++            if(!isError && kinetos_wled_override(wcol, wmode, wspeed, wbri)) {
++              ws2812fx.setBrightness(kinetos_night_brightness(wbri));
++              setAllRGB(wcol, wmode, wspeed);
++              return 60 * 1000;
++            }
++          }
 +          // Kinetos "Light Show": a random WS2812FX effect every 16 s, named on the display.
 +          // Errors still show the normal error colour.
 +          if(kinetos_lightshow_enabled && !isError)
@@ -639,7 +649,7 @@ index 33f3a774..961455ae 100644
              setAllRGB(col, FX_MODE_COLOR_WIPE, speed);
            } else if(isError){
              setAllRGB(col, FX_MODE_FADE, DEFAULT_FX_SPEED);
-@@ -333,7 +359,11 @@ unsigned long LedManagerTask::loop(MicroTasks::WakeReason reason)
+@@ -333,7 +369,11 @@ unsigned long LedManagerTask::loop(MicroTasks::WakeReason reason)
              setAllRGB(col, FX_MODE_STATIC, DEFAULT_FX_SPEED);
            }    
            //DBUGF("MODE:  LedState_Evse_State\n");
@@ -1635,13 +1645,15 @@ index 00000000..ad62e13a
 +#endif // KINETOS_CRASH_H
 diff --git a/src/kinetos/kinetos_extras.cpp b/src/kinetos/kinetos_extras.cpp
 new file mode 100644
-index 00000000..6b6b22fa
+index 00000000..63f9e302
 --- /dev/null
 +++ b/src/kinetos/kinetos_extras.cpp
-@@ -0,0 +1,225 @@
+@@ -0,0 +1,333 @@
 +#ifdef KINETOS_EXTRAS
 +
 +#include <esp_system.h>
++#include <EEPROM.h>
++#include <LittleFS.h>
 +
 +#include "kinetos_extras.h"
 +#include "kinetos_crash.h"
@@ -1649,6 +1661,8 @@ index 00000000..6b6b22fa
 +#include "app_config.h"
 +#include "grid_dimming.h"
 +#include "kinetos_budget.h"
++#include "kinetos_features.h"
++#include "kinetos_wled.h"
 +#include "sdm_meter.h"
 +#include "input.h"
 +#include "evse_man.h"
@@ -1688,10 +1702,73 @@ index 00000000..6b6b22fa
 +#define STOCK_LIGHTSHOW (1u << 23)
 +#define STOCK_MASK      (STOCK_ULM | STOCK_SMART1 | STOCK_LIGHTSHOW)
 +
++// Copy of the last good user config (compact JSON) in LittleFS. If the stored config ever
++// fails to load, it is restored from here instead of starting over with defaults.
++// A factory reset formats LittleFS, so it removes the copy too.
++#define CONFIG_BACKUP_FILE "/kinetos/config.bak"
++#define CONFIG_FAILURE_FILE "/kinetos/config-failure.txt"
++#define CONFIG_EEPROM_SIZE 4096
++
++static bool s_configRestored = false;
++static String s_backupJson;
++
++// Stored user config present (length + '{') although nothing was loaded from it?
++static bool stored_config_unreadable(String &why)
++{
++  EEPROM.begin(CONFIG_EEPROM_SIZE);
++  uint8_t a = EEPROM.read(0), b = EEPROM.read(1);
++  char start = EEPROM.read(2);
++  size_t length = a | (b << 8);
++  bool present = length >= 2 && length < CONFIG_EEPROM_SIZE && '{' == start;
++  if(present)
++  {
++    String json;
++    json.reserve(length + 1);
++    for(size_t i = 0; i < length; i++) {
++      json += (char)EEPROM.read(2 + i);
++    }
++    DynamicJsonDocument doc(JSON_OBJECT_SIZE(200) + CONFIG_EEPROM_SIZE);
++    DeserializationError err = deserializeJson(doc, json);
++    why = String("length ") + length + ", parse " + err.c_str();
++  } else {
++    why = String("length ") + length + ", start " + (int)start;
++  }
++  EEPROM.end();
++  return present;
++}
++
++static bool restore_from_backup(const String &why)
++{
++  File f = LittleFS.open(CONFIG_BACKUP_FILE, "r");
++  if(!f) {
++    return false;
++  }
++  String json = f.readString();
++  f.close();
++  if(!json.startsWith("{") || !config_deserialize(json)) {
++    return false;
++  }
++  File log = LittleFS.open(CONFIG_FAILURE_FILE, "a");
++  if(log) {
++    log.printf("t+%lums: stored config not loaded (%s), restored %u bytes from backup\n",
++      (unsigned long)millis(), why.c_str(), json.length());
++    log.close();
++  }
++  s_configRestored = true;
++  return true;
++}
++
 +bool kinetos_config_migrate(uint32_t &flags_changed, uint32_t default_flags)
 +{
 +  if(kinetos_config_ver >= KINETOS_CONFIG_VER) {
 +    return false;
++  }
++
++  // Our own settings were written before (backup exists) but did not load: bring them back
++  String why;
++  bool unreadable = stored_config_unreadable(why);
++  if(LittleFS.exists(CONFIG_BACKUP_FILE) && restore_from_backup(String(unreadable ? "unreadable, " : "not migrated, ") + why)) {
++    return true;
 +  }
 +
 +  // Bits never set by the user still had the old default
@@ -1726,6 +1803,40 @@ index 00000000..6b6b22fa
 +// ESP firmware switched it to external values with "$F2 0" and then fed it the meter's phase
 +// currents ("$T0 <mA L1> <mA L2> <mA L3>") and import energy ("$T1 <Wh>"). Without that the
 +// controller's own current reading ($GG) and energy counter stay at zero.
++// Keep the LittleFS copy of the user config current (checked every 10 minutes)
++static void kinetos_config_backup()
++{
++  static uint32_t last = 0;
++  if(0 != last && millis() - last < 10UL * 60UL * 1000UL) {
++    return;
++  }
++  if(0 == last && millis() < 60UL * 1000UL) {
++    return; // let the boot settle first
++  }
++  last = millis();
++  if(KINETOS_CONFIG_VER != kinetos_config_ver) {
++    return;
++  }
++  String json;
++  if(!config_serialize(json, false, true, false) || json.length() < 10 || json == s_backupJson) {
++    return;
++  }
++  if(!LittleFS.exists("/kinetos")) {
++    LittleFS.mkdir("/kinetos");
++  }
++  File f = LittleFS.open(CONFIG_BACKUP_FILE ".tmp", "w");
++  if(!f) {
++    return;
++  }
++  size_t written = f.print(json);
++  f.close();
++  if(written == json.length()) {
++    LittleFS.remove(CONFIG_BACKUP_FILE);
++    LittleFS.rename(CONFIG_BACKUP_FILE ".tmp", CONFIG_BACKUP_FILE);
++    s_backupJson = json;
++  }
++}
++
 +class KinetosControllerFeed : public MicroTasks::Task
 +{
 +  private:
@@ -1772,6 +1883,8 @@ index 00000000..6b6b22fa
 +        return 1000;
 +      }
 +
++      kinetos_config_backup();
++
 +      if(!sdmMeter.isValid()) {
 +        return 2000;
 +      }
@@ -1803,6 +1916,7 @@ index 00000000..6b6b22fa
 +void kinetos_begin()
 +{
 +  MicroTask.startTask(controllerFeed);
++  kinetos_features_begin();
 +
 +  // A panic record is only meaningful right after the panic reboot
 +  if(ESP_RST_PANIC != esp_reset_reason()) {
@@ -1835,7 +1949,11 @@ index 00000000..6b6b22fa
 +  doc["pv_share"] = kinetos_pv_share();
 +  doc["powersum"] = doc["power"]; // name used by the Kinetos firmware
 +  doc["controller_meter_feed"] = controllerFeed.isEnabled();
++  doc["config_restored"] = s_configRestored;
++  doc["config_backup_bytes"] = s_backupJson.length();
 +  kinetos_budget_status(doc);
++  kinetos_features_status(doc);
++  kinetos_wled_status(doc);
 +  doc["gpio14"] = digitalRead(14);
 +  doc["gpio15"] = digitalRead(15);
 +  doc["gpio39"] = digitalRead(39);
@@ -1866,10 +1984,10 @@ index 00000000..6b6b22fa
 +#endif // KINETOS_EXTRAS
 diff --git a/src/kinetos/kinetos_extras.h b/src/kinetos/kinetos_extras.h
 new file mode 100644
-index 00000000..ee7f7945
+index 00000000..12f0c516
 --- /dev/null
 +++ b/src/kinetos/kinetos_extras.h
-@@ -0,0 +1,52 @@
+@@ -0,0 +1,60 @@
 +// Kinetos OpenEVSE V5 extras on top of the upstream firmware and the Kinetos board support
 +// (SDM meter, grid dimming, Modbus TCP): PV share on the LED ring, Home Assistant discovery,
 +// panic trap and the migration of settings written by Kinetos V5 up to rev 8 (v5.1.5 based).
@@ -1887,6 +2005,10 @@ index 00000000..ee7f7945
 +extern String kinetos_lcd_splash;
 +extern bool kinetos_lightshow_enabled;
 +extern String kinetos_mqtt_ls_budget;
++extern uint8_t kinetos_max_current_1p;
++extern uint8_t kinetos_button_action;
++extern String kinetos_rfid_cars;
++extern bool kinetos_wled_enabled;
 +extern uint8_t kinetos_config_ver;
 +extern uint8_t kinetos_legacy_p14a_pin;
 +extern uint32_t kinetos_legacy_p14a_limit;
@@ -1901,6 +2023,10 @@ index 00000000..ee7f7945
 +  new ConfigOptDefinition<String>(kinetos_lcd_splash, "Kinetos ETH/WiFi", "lcd_splash", "lsp"), \
 +  new ConfigOptDefinition<bool>(kinetos_lightshow_enabled, false, "lightshow_enabled", "lsh"), \
 +  new ConfigOptDefinition<String>(kinetos_mqtt_ls_budget, "", "mqtt_ls_budget", "mlb"), \
++  new ConfigOptDefinition<uint8_t>(kinetos_max_current_1p, 0, "max_current_1p", "m1p"), \
++  new ConfigOptDefinition<uint8_t>(kinetos_button_action, 1, "button_action", "bta"), \
++  new ConfigOptDefinition<String>(kinetos_rfid_cars, "", "rfid_cars", "rfc"), \
++  new ConfigOptDefinition<bool>(kinetos_wled_enabled, false, "wled_enabled", "wle"), \
 +  new ConfigOptDefinition<uint8_t>(kinetos_config_ver, 0, "kinetos_config_ver", "kcv"), \
 +  new ConfigOptDefinition<uint8_t>(kinetos_legacy_p14a_pin, 14, "kinetos_legacy_p14a_pin", "p4p"), \
 +  new ConfigOptDefinition<uint32_t>(kinetos_legacy_p14a_limit, 4200, "kinetos_legacy_p14a_limit", "p4l"), \
@@ -1922,6 +2048,522 @@ index 00000000..ee7f7945
 +
 +#endif // KINETOS_EXTRAS
 +#endif // KINETOS_EXTRAS_H
+diff --git a/src/kinetos/kinetos_features.cpp b/src/kinetos/kinetos_features.cpp
+new file mode 100644
+index 00000000..84177593
+--- /dev/null
++++ b/src/kinetos/kinetos_features.cpp
+@@ -0,0 +1,468 @@
++#ifdef KINETOS_EXTRAS
++
++#if defined(ENABLE_DEBUG) && !defined(ENABLE_DEBUG_KINETOS)
++#undef ENABLE_DEBUG
++#endif
++
++#include <LittleFS.h>
++#include <MicroTasks.h>
++#include <sys/time.h>
++
++#include "kinetos_features.h"
++#include "kinetos_extras.h"
++#include "app_config.h"
++#include "debug.h"
++#include "evse_man.h"
++#include "sdm_meter.h"
++#include "lcd.h"
++#include "manual.h"
++#include "boost.h"
++#include "rfid.h"
++#include "rfid_user.h"
++#include "web_server.h"
++
++extern EvseManager evse;
++void buildStatus(DynamicJsonDocument &doc);
++
++uint8_t kinetos_max_current_1p;
++uint8_t kinetos_button_action;
++String kinetos_rfid_cars;
++
++#define EvseClient_Kinetos_OnePhase EVC(EvseClient_Vendor_Unregistered, 0x5303)
++// Just below grid dimming (5100), above the Safety-level claims, never above another cap
++#define EvseManager_Priority_OnePhase 5090
++
++#define SESSION_DIR       "/kinetos"
++#define SESSION_FILE      "/kinetos/sessions.csv"
++#define SESSION_OLD_FILE  "/kinetos/sessions.old.csv"
++#define SESSION_CUR_FILE  "/kinetos/session.cur"
++#define SESSION_MAX_BYTES (32 * 1024)
++#define SESSION_HEADER    "start;end;minutes;kwh;meter_start_kwh;meter_end_kwh;tag;user;car\n"
++
++// -------------------------------------------------------------------
++// Helpers
++// -------------------------------------------------------------------
++
++static bool clock_ok()
++{
++  return time(NULL) > 1600000000;
++}
++
++static String iso_now()
++{
++  if(!clock_ok()) {
++    return "";
++  }
++  time_t now = time(NULL);
++  struct tm t;
++  localtime_r(&now, &t);
++  char buf[24];
++  strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", &t);
++  return buf;
++}
++
++// Energy counter in kWh: the MID register if the meter is there, else the EVSE total
++static double energy_kwh()
++{
++  if(sdmMeter.isValid()) {
++    return sdmMeter.get(SdmMeter::ImportEnergy);
++  }
++  return evse.getTotalEnergy();
++}
++
++// "UID=1;UID2=2" -> car id for the tag, 0 if none
++static int car_for_tag(const String &tag)
++{
++  if(0 == tag.length() || 0 == kinetos_rfid_cars.length()) {
++    return 0;
++  }
++  int start = 0;
++  while(start < (int)kinetos_rfid_cars.length())
++  {
++    int end = kinetos_rfid_cars.indexOf(';', start);
++    if(end < 0) {
++      end = kinetos_rfid_cars.length();
++    }
++    String entry = kinetos_rfid_cars.substring(start, end);
++    int eq = entry.indexOf('=');
++    if(eq > 0) {
++      String uid = entry.substring(0, eq);
++      uid.trim();
++      if(uid.equalsIgnoreCase(tag)) {
++        return entry.substring(eq + 1).toInt();
++      }
++    }
++    start = end + 1;
++  }
++  return 0;
++}
++
++// Point the TeslaMate topics (teslamate/cars/<n>/...) at another car
++static void switch_teslamate_car(int car)
++{
++  if(car <= 0 || VEHICLE_DATA_SRC_MQTT != vehicle_data_src) {
++    return;
++  }
++  bool changed = false;
++  const char *keys[] = { "mqtt_vehicle_soc", "mqtt_vehicle_range", "mqtt_vehicle_eta" };
++  String *values[] = { &mqtt_vehicle_soc, &mqtt_vehicle_range, &mqtt_vehicle_eta };
++  for(int i = 0; i < 3; i++)
++  {
++    String topic = *values[i];
++    int p = topic.indexOf("/cars/");
++    if(p < 0) {
++      continue;
++    }
++    int numStart = p + 6;
++    int numEnd = topic.indexOf('/', numStart);
++    if(numEnd < 0) {
++      continue;
++    }
++    String updated = topic.substring(0, numStart) + String(car) + topic.substring(numEnd);
++    if(updated != topic) {
++      config_set(keys[i], updated);
++      changed = true;
++    }
++  }
++  if(changed) {
++    config_user_commit();
++    DBUGF("kinetos: TeslaMate car %d", car);
++  }
++}
++
++// -------------------------------------------------------------------
++// Session log + one phase limit
++// -------------------------------------------------------------------
++
++class KinetosSessions : public MicroTasks::Task
++{
++  private:
++    bool _active = false;
++    String _start;
++    double _startKwh = 0;
++    uint32_t _startMs = 0;
++    String _tag;
++    bool _carSwitched = false;
++    bool _limitClaimed = false;
++    long _limitAmps = 0;
++
++    void saveCurrent()
++    {
++      File f = LittleFS.open(SESSION_CUR_FILE, "w");
++      if(f) {
++        f.printf("%s;%.3f;%s\n", _start.c_str(), _startKwh, _tag.c_str());
++        f.close();
++      }
++    }
++
++    void restoreCurrent()
++    {
++      File f = LittleFS.open(SESSION_CUR_FILE, "r");
++      if(!f) {
++        return;
++      }
++      String line = f.readStringUntil('\n');
++      f.close();
++      int a = line.indexOf(';');
++      int b = line.indexOf(';', a + 1);
++      if(a < 0 || b < 0) {
++        return;
++      }
++      _start = line.substring(0, a);
++      _startKwh = line.substring(a + 1, b).toDouble();
++      _tag = line.substring(b + 1);
++      _startMs = millis();
++      _active = true; // closed on the next pass if the car is gone
++    }
++
++    void startSession()
++    {
++      _active = true;
++      _start = iso_now();
++      _startKwh = energy_kwh();
++      _startMs = millis();
++      _tag = "";
++      _carSwitched = false;
++      saveCurrent();
++      DBUGF("kinetos: session start %.3f kWh", _startKwh);
++    }
++
++    void endSession()
++    {
++      double endKwh = energy_kwh();
++      double kwh = endKwh - _startKwh;
++      if(kwh < 0) {
++        kwh = 0;
++      }
++      if(kwh >= 0.01)
++      {
++        if(!LittleFS.exists(SESSION_DIR)) {
++          LittleFS.mkdir(SESSION_DIR);
++        }
++        File check = LittleFS.open(SESSION_FILE, "r");
++        size_t size = check ? check.size() : 0;
++        if(check) {
++          check.close();
++        }
++        if(size > SESSION_MAX_BYTES) {
++          LittleFS.remove(SESSION_OLD_FILE);
++          LittleFS.rename(SESSION_FILE, SESSION_OLD_FILE);
++          size = 0;
++        }
++        File f = LittleFS.open(SESSION_FILE, "a");
++        if(f)
++        {
++          if(0 == size) {
++            f.print(SESSION_HEADER);
++          }
++          String user = _tag.length() ? RfidUser::getUserName(_tag) : "";
++          user.replace(";", ",");
++          int car = car_for_tag(_tag);
++          f.printf("%s;%s;%lu;%.3f;%.3f;%.3f;%s;%s;%s\n",
++            _start.c_str(), iso_now().c_str(),
++            (unsigned long)((millis() - _startMs) / 60000UL),
++            kwh, _startKwh, endKwh,
++            _tag.c_str(), user.c_str(), car > 0 ? String(car).c_str() : "");
++          f.close();
++        }
++      }
++      LittleFS.remove(SESSION_CUR_FILE);
++      DBUGF("kinetos: session end %.3f kWh", kwh);
++      _active = false;
++    }
++
++    void onePhaseLimit()
++    {
++      bool want = kinetos_max_current_1p > 0 && evse.isCharging() &&
++                  sdmMeter.isValid() && 1 == sdmMeter.activePhases();
++      if(want)
++      {
++        long amps = kinetos_max_current_1p;
++        uint32_t other = evse.getMaxCurrentExcluding(EvseClient_Kinetos_OnePhase);
++        if(other != UINT32_MAX && (long)other < amps) {
++          amps = other;
++        }
++        if(!_limitClaimed || amps != _limitAmps)
++        {
++          EvseProperties props;
++          props.setMaxCurrent(amps);
++          evse.claim(EvseClient_Kinetos_OnePhase, EvseManager_Priority_OnePhase, props);
++          _limitClaimed = true;
++          _limitAmps = amps;
++        }
++      }
++      else if(_limitClaimed)
++      {
++        evse.release(EvseClient_Kinetos_OnePhase);
++        _limitClaimed = false;
++        _limitAmps = 0;
++      }
++    }
++
++  protected:
++    void setup()
++    {
++      restoreCurrent();
++    }
++
++    unsigned long loop(MicroTasks::WakeReason reason)
++    {
++      onePhaseLimit();
++
++      bool connected = evse.isVehicleConnected();
++      if(!_active && connected && evse.isCharging()) {
++        startSession();
++      } else if(_active && !connected) {
++        endSession();
++      }
++
++      if(_active)
++      {
++        String tag = rfid.getAuthenticatedTag();
++        if(tag.length() && tag != _tag) {
++          _tag = tag;
++          saveCurrent();
++        }
++        if(!_carSwitched && _tag.length()) {
++          _carSwitched = true;
++          switch_teslamate_car(car_for_tag(_tag));
++        }
++      }
++      return 5000;
++    }
++
++  public:
++    bool isActive() { return _active; }
++    double sessionKwh() { return _active ? energy_kwh() - _startKwh : 0; }
++    bool isLimited() { return _limitClaimed; }
++    const String &tag() { return _tag; }
++};
++
++static KinetosSessions sessions;
++
++// -------------------------------------------------------------------
++// Display messages
++// -------------------------------------------------------------------
++
++bool kinetos_display_message(const String &payload)
++{
++  String line1, line2;
++  int seconds = 10;
++  if(payload.startsWith("{"))
++  {
++    StaticJsonDocument<256> doc;
++    if(deserializeJson(doc, payload)) {
++      return false;
++    }
++    line1 = doc["line1"] | "";
++    line2 = doc["line2"] | "";
++    seconds = doc["time"] | 10;
++  }
++  else
++  {
++    int nl = payload.indexOf('\n');
++    line1 = nl < 0 ? payload : payload.substring(0, nl);
++    line2 = nl < 0 ? "" : payload.substring(nl + 1);
++  }
++  if(0 == line1.length() && 0 == line2.length()) {
++    return false;
++  }
++  seconds = constrain(seconds, 1, 300);
++  line1 = line1.substring(0, 16);
++  line2 = line2.substring(0, 16);
++  lcd.display(line1, 0, 0, 0, LCD_CLEAR_LINE | LCD_DISPLAY_NOW);
++  lcd.display(line2, 0, 1, seconds * 1000, LCD_CLEAR_LINE);
++  return true;
++}
++
++// -------------------------------------------------------------------
++// Button
++// -------------------------------------------------------------------
++
++void kinetos_button_short_press()
++{
++  switch(kinetos_button_action)
++  {
++    case KINETOS_BUTTON_PAUSE:
++      manual.toggle();
++      lcd.display(manual.isActive() ? F("Manual override") : F("Override off"), 0, 1, 3000, LCD_CLEAR_LINE | LCD_DISPLAY_NOW);
++      break;
++    case KINETOS_BUTTON_BOOST:
++      if(boost.isActive()) {
++        boost.cancel();
++        lcd.display(F("Boost off"), 0, 1, 3000, LCD_CLEAR_LINE | LCD_DISPLAY_NOW);
++      } else {
++        boost.arm(LimitType::Time, 3600);
++        lcd.display(F("Boost 1 h"), 0, 1, 3000, LCD_CLEAR_LINE | LCD_DISPLAY_NOW);
++      }
++      break;
++    default:
++      break;
++  }
++}
++
++// -------------------------------------------------------------------
++// HTTP: /metrics and /kinetos/sessions
++// -------------------------------------------------------------------
++
++static void metric(MongooseHttpServerResponseStream *r, const char *key, double value)
++{
++  String name = "openevse_";
++  for(const char *c = key; *c; c++) {
++    name += isalnum(*c) ? *c : '_';
++  }
++  r->printf("%s{host=\"%s\"} %.6g\n", name.c_str(), esp_hostname.c_str(), value);
++}
++
++static void handleMetrics(MongooseHttpServerRequest *request)
++{
++  MongooseHttpServerResponseStream *response;
++  if(false == requestPreProcess(request, response, CONTENT_TYPE_TEXT)) {
++    return;
++  }
++  DynamicJsonDocument doc(JSON_OBJECT_SIZE(170) + 3072);
++  buildStatus(doc);
++  for(JsonPair kv : doc.as<JsonObject>())
++  {
++    JsonVariant v = kv.value();
++    if(v.is<bool>()) {
++      metric(response, kv.key().c_str(), v.as<bool>() ? 1 : 0);
++    } else if(v.is<double>() || v.is<long>() || v.is<unsigned long>()) {
++      metric(response, kv.key().c_str(), v.as<double>());
++    }
++  }
++  metric(response, "session_active", sessions.isActive() ? 1 : 0);
++  metric(response, "session_kwh", sessions.sessionKwh());
++  request->send(response);
++}
++
++static void sendFile(MongooseHttpServerResponseStream *response, const char *path, bool skipHeader)
++{
++  File f = LittleFS.open(path, "r");
++  if(!f) {
++    return;
++  }
++  bool first = true;
++  while(f.available())
++  {
++    String line = f.readStringUntil('\n');
++    if(first && skipHeader) {
++      first = false;
++      continue;
++    }
++    first = false;
++    response->print(line);
++    response->print("\n");
++  }
++  f.close();
++}
++
++static void handleSessions(MongooseHttpServerRequest *request)
++{
++  MongooseHttpServerResponseStream *response;
++  if(false == requestPreProcess(request, response, CONTENT_TYPE_TEXT)) {
++    return;
++  }
++  if(HTTP_DELETE == request->method())
++  {
++    LittleFS.remove(SESSION_FILE);
++    LittleFS.remove(SESSION_OLD_FILE);
++    response->print("ok\n");
++    request->send(response);
++    return;
++  }
++  response->addHeader(F("Content-Disposition"), F("attachment; filename=\"sessions.csv\""));
++  bool hasOld = LittleFS.exists(SESSION_OLD_FILE);
++  if(hasOld) {
++    sendFile(response, SESSION_OLD_FILE, false);
++  }
++  if(LittleFS.exists(SESSION_FILE)) {
++    sendFile(response, SESSION_FILE, hasOld);
++  } else if(!hasOld) {
++    response->print(SESSION_HEADER);
++  }
++  request->send(response);
++}
++
++void kinetos_features_register(MongooseHttpServer &server)
++{
++  server.on("/metrics$", handleMetrics);
++  server.on("/kinetos/sessions$", handleSessions);
++}
++
++void kinetos_features_begin()
++{
++  MicroTask.startTask(sessions);
++}
++
++void kinetos_features_status(JsonDocument &doc)
++{
++  doc["session_active"] = sessions.isActive();
++  if(sessions.isActive()) {
++    doc["session_kwh"] = sessions.sessionKwh();
++    doc["session_tag"] = sessions.tag();
++  }
++  doc["limit_1p_active"] = sessions.isLimited();
++}
++
++#endif // KINETOS_EXTRAS
+diff --git a/src/kinetos/kinetos_features.h b/src/kinetos/kinetos_features.h
+new file mode 100644
+index 00000000..208c148b
+--- /dev/null
++++ b/src/kinetos/kinetos_features.h
+@@ -0,0 +1,36 @@
++// Kinetos OpenEVSE V5 features on top of upstream:
++//  - Prometheus metrics (GET /metrics)
++//  - display messages from MQTT ("<mqtt_topic>/display/set")
++//  - separate current limit while the car charges on one phase (max_current_1p)
++//  - short press on the front button: start/pause or boost (button_action)
++//  - charging session log with RFID tag, user and car (GET /kinetos/sessions)
++//  - RFID tag -> TeslaMate car (rfid_cars "UID=1;UID=2")
++#ifndef KINETOS_FEATURES_H
++#define KINETOS_FEATURES_H
++
++#ifdef KINETOS_EXTRAS
++
++#include <Arduino.h>
++#include <ArduinoJson.h>
++#include <MongooseHttpServer.h>
++
++#define KINETOS_BUTTON_NONE  0
++#define KINETOS_BUTTON_PAUSE 1
++#define KINETOS_BUTTON_BOOST 2
++
++extern uint8_t kinetos_max_current_1p;
++extern uint8_t kinetos_button_action;
++extern String kinetos_rfid_cars;
++
++void kinetos_features_begin();
++void kinetos_features_register(MongooseHttpServer &server);
++void kinetos_features_status(JsonDocument &doc);
++
++// payload: "text", "line 1\nline 2" or {"line1":..,"line2":..,"time":s}
++bool kinetos_display_message(const String &payload);
++
++// Called by the button handler for a short press (< 1 s)
++void kinetos_button_short_press();
++
++#endif // KINETOS_EXTRAS
++#endif // KINETOS_FEATURES_H
 diff --git a/src/kinetos/kinetos_ha.cpp b/src/kinetos/kinetos_ha.cpp
 new file mode 100644
 index 00000000..71c56f4f
@@ -2235,6 +2877,303 @@ index 00000000..807856a6
 +uint8_t kinetos_night_brightness(uint8_t brightness);
 +
 +#endif // KINETOS_LED_H
+diff --git a/src/kinetos/kinetos_wled.cpp b/src/kinetos/kinetos_wled.cpp
+new file mode 100644
+index 00000000..7da86db9
+--- /dev/null
++++ b/src/kinetos/kinetos_wled.cpp
+@@ -0,0 +1,265 @@
++// A small part of the WLED JSON API (https://kno.wled.ge/interfaces/json-api/) for the LED ring,
++// so the WLED app and Home Assistant's WLED integration can set colour, effect and brightness.
++// "on": true takes over the ring (errors still show red), "on": false hands it back to the
++// charger status. Off by default (config wled_enabled); WLED has no login, so these endpoints
++// don't ask for one either. They only touch the LEDs.
++#ifdef KINETOS_EXTRAS
++
++#if defined(ENABLE_DEBUG) && !defined(ENABLE_DEBUG_KINETOS)
++#undef ENABLE_DEBUG
++#endif
++
++#include <Arduino.h>
++#include <ArduinoJson.h>
++#include <WiFi.h>
++#include <MongooseHttpServer.h>
++
++#include "kinetos_wled.h"
++#include "app_config.h"
++#include "debug.h"
++#include "emonesp.h"
++#include "LedManagerTask.h"
++
++#if defined(ENABLE_WS2812FX)
++#include <WS2812FX.h>
++extern WS2812FX ws2812fx;
++// Modes from 72 on are WS2812FX "custom" slots without an effect
++#define FX_COUNT (ws2812fx.getModeCount() < 72 ? ws2812fx.getModeCount() : 72)
++#else
++#define FX_COUNT 1
++#endif
++
++bool kinetos_wled_enabled;
++
++static bool s_on = false;
++static uint8_t s_bri = 128;
++static uint32_t s_col = 0xFF8000;
++static uint8_t s_fx = 0;
++static uint8_t s_sx = 128;
++
++bool kinetos_wled_override(uint32_t &colour, uint8_t &mode, uint16_t &speed, uint8_t &brightness)
++{
++  if(!kinetos_wled_enabled || !s_on) {
++    return false;
++  }
++  colour = s_col;
++  mode = s_fx;
++  speed = 5000 - (uint16_t)s_sx * 19; // WLED: higher is faster, WS2812FX: lower is faster
++  brightness = s_bri;
++  return true;
++}
++
++static void addState(JsonObject state)
++{
++  state["on"] = s_on;
++  state["bri"] = s_bri;
++  state["transition"] = 7;
++  state["ps"] = -1;
++  state["pl"] = -1;
++  JsonObject nl = state.createNestedObject("nl");
++  nl["on"] = false; nl["dur"] = 60; nl["mode"] = 1; nl["tbri"] = 0; nl["rem"] = -1;
++  JsonObject udpn = state.createNestedObject("udpn");
++  udpn["send"] = false; udpn["recv"] = false;
++  state["lor"] = 0;
++  state["mainseg"] = 0;
++  JsonObject seg = state.createNestedArray("seg").createNestedObject();
++  seg["id"] = 0; seg["start"] = 0; seg["stop"] = NEO_PIXEL_LENGTH; seg["len"] = NEO_PIXEL_LENGTH;
++  seg["grp"] = 1; seg["spc"] = 0; seg["of"] = 0; seg["on"] = s_on; seg["frz"] = false;
++  seg["bri"] = 255; seg["cct"] = 127;
++  JsonArray cols = seg.createNestedArray("col");
++  JsonArray c0 = cols.createNestedArray();
++  c0.add((s_col >> 16) & 0xFF); c0.add((s_col >> 8) & 0xFF); c0.add(s_col & 0xFF);
++  JsonArray c1 = cols.createNestedArray(); c1.add(0); c1.add(0); c1.add(0);
++  JsonArray c2 = cols.createNestedArray(); c2.add(0); c2.add(0); c2.add(0);
++  seg["fx"] = s_fx; seg["sx"] = s_sx; seg["ix"] = 128; seg["pal"] = 0;
++  seg["sel"] = true; seg["rev"] = false; seg["mi"] = false;
++}
++
++static void addInfo(JsonObject info)
++{
++  info["ver"] = "0.15.0";
++  info["vid"] = 2412100;
++  JsonObject leds = info.createNestedObject("leds");
++  leds["count"] = NEO_PIXEL_LENGTH; leds["pwr"] = 0; leds["fps"] = 0; leds["maxpwr"] = 0;
++  leds["maxseg"] = 1; leds["rgbw"] = false; leds["wv"] = 0; leds["cct"] = 0;
++  leds.createNestedArray("seglc").add(1);
++  leds["lc"] = 1;
++  info["str"] = false;
++  info["name"] = esp_hostname;
++  info["udpport"] = 21324;
++  info["live"] = false;
++  info["liveseg"] = -1;
++  info["lm"] = "";
++  info["lip"] = "";
++  info["ws"] = -1;
++  info["fxcount"] = FX_COUNT;
++  info["palcount"] = 1;
++  info["cpalcount"] = 0;
++  JsonObject wifi = info.createNestedObject("wifi");
++  wifi["bssid"] = ""; wifi["rssi"] = WiFi.RSSI(); wifi["signal"] = 100; wifi["channel"] = 1;
++  JsonObject fs = info.createNestedObject("fs");
++  fs["u"] = 0; fs["t"] = 0; fs["pmt"] = 0;
++  info["ndc"] = 0;
++  info["arch"] = "esp32";
++  info["core"] = "v4.4";
++  info["freeheap"] = ESP.getFreeHeap();
++  info["uptime"] = millis() / 1000;
++  info["opt"] = 0;
++  info["brand"] = "WLED";
++  info["product"] = "Kinetos OpenEVSE V5";
++  String mac = WiFi.macAddress();
++  mac.replace(":", "");
++  mac.toLowerCase();
++  info["mac"] = mac;
++  info["ip"] = WiFi.localIP().toString();
++}
++
++static void addEffects(JsonArray effects)
++{
++#if defined(ENABLE_WS2812FX)
++  for(uint8_t i = 0; i < FX_COUNT; i++) {
++    effects.add(String(ws2812fx.getModeName(i)));
++  }
++#else
++  effects.add("Solid");
++#endif
++}
++
++static void applyState(JsonObject in)
++{
++  if(in.containsKey("on"))
++  {
++    JsonVariant on = in["on"];
++    if(on.is<const char *>() && 0 == strcmp(on.as<const char *>(), "t")) {
++      s_on = !s_on;
++    } else {
++      s_on = on.as<bool>();
++    }
++  }
++  if(in.containsKey("bri")) {
++    s_bri = in["bri"];
++    if(s_bri > 0) {
++      s_on = in.containsKey("on") ? s_on : true;
++    }
++  }
++  JsonVariant segs = in["seg"];
++  JsonObject seg = segs.is<JsonArray>() ? segs[0].as<JsonObject>() : segs.as<JsonObject>();
++  if(!seg.isNull())
++  {
++    JsonArray c0 = seg["col"][0];
++    if(!c0.isNull() && c0.size() >= 3) {
++      s_col = ((uint32_t)(uint8_t)c0[0].as<int>() << 16) | ((uint32_t)(uint8_t)c0[1].as<int>() << 8) | (uint8_t)c0[2].as<int>();
++    }
++    if(seg.containsKey("fx")) {
++      int fx = seg["fx"];
++      if(fx >= 0 && fx < (int)FX_COUNT) {
++        s_fx = fx;
++      }
++    }
++    if(seg.containsKey("sx")) {
++      s_sx = seg["sx"];
++    }
++    if(seg.containsKey("on")) {
++      s_on = seg["on"];
++    }
++  }
++  MicroTask.wakeTask(&ledManager);
++}
++
++static void sendJson(MongooseHttpServerRequest *request, JsonDocument &doc, int code = 200)
++{
++  MongooseHttpServerResponseStream *response = request->beginResponseStream();
++  response->setContentType(F("application/json"));
++  response->addHeader(F("Access-Control-Allow-Origin"), F("*"));
++  response->setCode(code);
++  serializeJson(doc, *response);
++  request->send(response);
++}
++
++static bool enabledOr404(MongooseHttpServerRequest *request)
++{
++  if(kinetos_wled_enabled) {
++    return true;
++  }
++  MongooseHttpServerResponseStream *response = request->beginResponseStream();
++  response->setCode(404);
++  request->send(response);
++  return false;
++}
++
++static void handleJson(MongooseHttpServerRequest *request)
++{
++  if(!enabledOr404(request)) {
++    return;
++  }
++  String uri = request->uri().toString();
++  if(HTTP_POST == request->method())
++  {
++    DynamicJsonDocument in(1024);
++    if(deserializeJson(in, request->body().toString())) {
++      StaticJsonDocument<64> err;
++      err["error"] = 9;
++      sendJson(request, err, 400);
++      return;
++    }
++    applyState(in.as<JsonObject>());
++    if(in["v"] | false) {
++      DynamicJsonDocument out(2048);
++      addState(out.to<JsonObject>());
++      sendJson(request, out);
++    } else {
++      StaticJsonDocument<32> ok;
++      ok["success"] = true;
++      sendJson(request, ok);
++    }
++    return;
++  }
++
++  DynamicJsonDocument doc(6144);
++  if(uri.endsWith("/state")) {
++    addState(doc.to<JsonObject>());
++  } else if(uri.endsWith("/info")) {
++    addInfo(doc.to<JsonObject>());
++  } else if(uri.endsWith("/eff")) {
++    addEffects(doc.to<JsonArray>());
++  } else if(uri.endsWith("/pal")) {
++    doc.to<JsonArray>().add("Default");
++  } else if(uri.endsWith("/si")) {
++    addState(doc.createNestedObject("state"));
++    addInfo(doc.createNestedObject("info"));
++  } else {
++    addState(doc.createNestedObject("state"));
++    addInfo(doc.createNestedObject("info"));
++    addEffects(doc.createNestedArray("effects"));
++    doc.createNestedArray("palettes").add("Default");
++  }
++  sendJson(request, doc);
++}
++
++static void handlePresets(MongooseHttpServerRequest *request)
++{
++  if(!enabledOr404(request)) {
++    return;
++  }
++  StaticJsonDocument<64> doc;
++  doc.createNestedObject("0");
++  sendJson(request, doc);
++}
++
++void kinetos_wled_register(MongooseHttpServer &server)
++{
++  server.on("/json$", handleJson);
++  server.on("/json/state$", handleJson);
++  server.on("/json/info$", handleJson);
++  server.on("/json/eff$", handleJson);
++  server.on("/json/pal$", handleJson);
++  server.on("/json/si$", handleJson);
++  server.on("/presets.json$", handlePresets);
++}
++
++void kinetos_wled_status(JsonDocument &doc)
++{
++  doc["wled_on"] = kinetos_wled_enabled && s_on;
++}
++
++#endif // KINETOS_EXTRAS
+diff --git a/src/kinetos/kinetos_wled.h b/src/kinetos/kinetos_wled.h
+new file mode 100644
+index 00000000..b4daa240
+--- /dev/null
++++ b/src/kinetos/kinetos_wled.h
+@@ -0,0 +1,20 @@
++// WLED JSON API subset for the LED ring (see kinetos_wled.cpp)
++#ifndef KINETOS_WLED_H
++#define KINETOS_WLED_H
++
++#ifdef KINETOS_EXTRAS
++
++#include <Arduino.h>
++#include <ArduinoJson.h>
++#include <MongooseHttpServer.h>
++
++extern bool kinetos_wled_enabled;
++
++// True while WLED controls the ring; fills colour, WS2812FX mode, speed and brightness
++bool kinetos_wled_override(uint32_t &colour, uint8_t &mode, uint16_t &speed, uint8_t &brightness);
++
++void kinetos_wled_register(MongooseHttpServer &server);
++void kinetos_wled_status(JsonDocument &doc);
++
++#endif // KINETOS_EXTRAS
++#endif // KINETOS_WLED_H
 diff --git a/src/lcd.cpp b/src/lcd.cpp
 index 5afe3920..7486fc93 100644
 --- a/src/lcd.cpp
@@ -3222,10 +4161,10 @@ index 00000000..04f9d21a
 +
 +#endif // _OPENEVSE_MODBUS_TCP_PROTOCOL_H
 diff --git a/src/mqtt.cpp b/src/mqtt.cpp
-index 5e66d75e..9b4b950c 100644
+index 5e66d75e..dc783f59 100644
 --- a/src/mqtt.cpp
 +++ b/src/mqtt.cpp
-@@ -18,6 +18,13 @@
+@@ -18,6 +18,14 @@
  #include "manual.h"
  #include "scheduler.h"
  #include "current_shaper.h"
@@ -3234,12 +4173,13 @@ index 5e66d75e..9b4b950c 100644
 +#include "kinetos/kinetos_ha.h"
 +#include "kinetos/kinetos_led.h"
 +#include "kinetos/kinetos_budget.h"
++#include "kinetos/kinetos_features.h"
 +#endif
 +#include "grid_dimming_calc.h"
  #include "home_battery.h"
  
  Mqtt mqtt(evse); // global instance
-@@ -272,6 +279,12 @@ void Mqtt::onMqttConnect() {
+@@ -272,6 +280,12 @@ void Mqtt::onMqttConnect() {
    event_send(doc);
  
    subscribeTopics();
@@ -3252,19 +4192,20 @@ index 5e66d75e..9b4b950c 100644
    publishInitialState();
  }
  
-@@ -342,6 +355,11 @@ void Mqtt::subscribeTopics() {
+@@ -342,6 +356,12 @@ void Mqtt::subscribeTopics() {
    // Settable topics
    _mqttclient.subscribe(mqtt_topic + "/divertmode/set"); yield();
    _mqttclient.subscribe(mqtt_topic + "/shaper/set"); yield();
 +  _mqttclient.subscribe(mqtt_topic + "/dimming/set"); yield();
 +#ifdef KINETOS_EXTRAS
 +  _mqttclient.subscribe(mqtt_topic + "/loadsharing/budget/set"); yield();
++  _mqttclient.subscribe(mqtt_topic + "/display/set"); yield();
 +  if (kinetos_mqtt_ls_budget != "") { _mqttclient.subscribe(kinetos_mqtt_ls_budget); yield(); }
 +#endif
    _mqttclient.subscribe(mqtt_topic + "/override/set"); yield();
    _mqttclient.subscribe(mqtt_topic + "/claim/set"); yield();
    _mqttclient.subscribe(mqtt_topic + "/schedule/set"); yield();
-@@ -447,6 +465,9 @@ void Mqtt::handleMqttMessage(MongooseString topic, MongooseString payload) {
+@@ -447,6 +467,9 @@ void Mqtt::handleMqttMessage(MongooseString topic, MongooseString payload) {
    if (topic_string == mqtt_solar){
      int solar = payload_str.toInt();
      divert.setSolar(solar);
@@ -3274,7 +4215,7 @@ index 5e66d75e..9b4b950c 100644
      DBUGF("solar:%dW", solar);
      divert.update_state();
      if (shaper.getState()) {
-@@ -456,6 +477,9 @@ void Mqtt::handleMqttMessage(MongooseString topic, MongooseString payload) {
+@@ -456,6 +479,9 @@ void Mqtt::handleMqttMessage(MongooseString topic, MongooseString payload) {
    else if (topic_string == mqtt_grid_ie) {
      int grid_ie = payload_str.toInt();
      divert.setGridIe(grid_ie);
@@ -3284,7 +4225,7 @@ index 5e66d75e..9b4b950c 100644
      DBUGF("grid:%dW", grid_ie);
      divert.update_state();
      if (mqtt_live_pwr == mqtt_grid_ie) {
-@@ -483,6 +507,12 @@ void Mqtt::handleMqttMessage(MongooseString topic, MongooseString payload) {
+@@ -483,6 +509,12 @@ void Mqtt::handleMqttMessage(MongooseString topic, MongooseString payload) {
    }
    else if (topic_string == mqtt_vehicle_eta && vehicle_data_src == VEHICLE_DATA_SRC_MQTT) {
      int vehicle_eta = payload_str.toInt();
@@ -3297,11 +4238,14 @@ index 5e66d75e..9b4b950c 100644
      _evse->setVehicleEta(vehicle_eta);
      StaticJsonDocument<128> event; event["time_to_full_charge"] = vehicle_eta; event_send(event);
    }
-@@ -493,6 +523,14 @@ void Mqtt::handleMqttMessage(MongooseString topic, MongooseString payload) {
+@@ -493,6 +525,17 @@ void Mqtt::handleMqttMessage(MongooseString topic, MongooseString payload) {
    }
    // Home/powerwall battery is display-only with no source arbitration (mirrors its
    // POST /status path), so it is gated only on the topic being configured.
 +#ifdef KINETOS_EXTRAS
++  else if (topic_string == mqtt_topic + "/display/set") {
++    kinetos_display_message(payload_str);
++  }
 +  else if (topic_string == mqtt_topic + "/loadsharing/budget/set" ||
 +           (kinetos_mqtt_ls_budget != "" && topic_string == kinetos_mqtt_ls_budget)) {
 +    if (!kinetos_budget_set(payload_str)) {
@@ -3312,7 +4256,7 @@ index 5e66d75e..9b4b950c 100644
    else if (mqtt_home_battery_soc != "" && topic_string == mqtt_home_battery_soc) {
      int soc = payload_str.toInt();
      home_battery_set_soc(soc);
-@@ -513,6 +551,12 @@ void Mqtt::handleMqttMessage(MongooseString topic, MongooseString payload) {
+@@ -513,6 +556,12 @@ void Mqtt::handleMqttMessage(MongooseString topic, MongooseString payload) {
      byte newshaper = payload_str.toInt();
      if (newshaper==0) shaper.setState(false); else if (newshaper==1) shaper.setState(true);
    }
@@ -3325,6 +4269,33 @@ index 5e66d75e..9b4b950c 100644
    else if (topic_string == mqtt_topic + "/override/set") {
      if (payload_str.equals("clear")) {
        if (manual.release()) {
+diff --git a/src/net_manager.cpp b/src/net_manager.cpp
+index ea28ef3d..a55ff076 100644
+--- a/src/net_manager.cpp
++++ b/src/net_manager.cpp
+@@ -1,3 +1,6 @@
++#ifdef KINETOS_EXTRAS
++#include "kinetos/kinetos_features.h"
++#endif
+ #include "emonesp.h"
+ #include "net_manager.h"
+ #include "app_config.h"
+@@ -731,7 +734,14 @@ unsigned long NetManagerTask::serviceButton()
+       DBUGF("Button released");
+       if(millis() > _wifiButtonTimeOut + WIFI_BUTTON_AP_TIMEOUT) {
+         wifiStartAccessPoint();
+-      } else {
++      }
++#ifdef KINETOS_EXTRAS
++      // Kinetos: short press (< 1 s) = start/pause or boost, 1-2 s = network info
++      else if(millis() < _wifiButtonTimeOut + 1000 && KINETOS_BUTTON_NONE != kinetos_button_action) {
++        kinetos_button_short_press();
++      }
++#endif
++      else {
+         displayState();
+       }
+     }
 diff --git a/src/sdm_meter.cpp b/src/sdm_meter.cpp
 new file mode 100644
 index 00000000..b2be8c34
@@ -3615,18 +4586,22 @@ index 00000000..d1d6bd83
 +
 +#endif // SDM_METER_H
 diff --git a/src/web_server.cpp b/src/web_server.cpp
-index 32200661..9174213e 100644
+index 32200661..3af9e2a5 100644
 --- a/src/web_server.cpp
 +++ b/src/web_server.cpp
-@@ -53,6 +53,7 @@ typedef const __FlashStringHelper *fstr_t;
+@@ -53,6 +53,11 @@ typedef const __FlashStringHelper *fstr_t;
  #include "loadsharing_peer_poller.h"
  #include "boost.h"
  #include "notifications.h"
 +#include "grid_dimming.h"
++#ifdef KINETOS_EXTRAS
++#include "kinetos/kinetos_features.h"
++#include "kinetos/kinetos_wled.h"
++#endif
  #include "web_auth.h"
  #include "web_auth_secret.h"
  
-@@ -544,9 +545,9 @@ static String html_escape(const String &input) {
+@@ -544,9 +549,14 @@ static String html_escape(const String &input) {
  // call sites had drifted: onWsConnect sized its document for 40 members while
  // buildStatus emits around 95, so every websocket connect pushed a silently
  // truncated status. ArduinoJson does not signal that with an error -- it just
@@ -3635,11 +4610,16 @@ index 32200661..9174213e 100644
 -#define STATUS_JSON_CAPACITY (JSON_OBJECT_SIZE(131) + 2048)
 +// stops adding members. 134 = 128 plus the "notifications" object and its two
 +// members (count, severity), plus the three dimming_* members.
++#ifdef KINETOS_EXTRAS
++// Kinetos adds about 25 members (meter, feed, budget, sessions, LEDs, panic record)
++#define STATUS_JSON_CAPACITY (JSON_OBJECT_SIZE(164) + 3072)
++#else
 +#define STATUS_JSON_CAPACITY (JSON_OBJECT_SIZE(134) + 2048)
++#endif
  
  // LittleFS.totalBytes() and LittleFS.usedBytes() each run lfs_fs_size(), a
  // full traversal of every metadata pair and data block in the filesystem,
-@@ -675,6 +676,9 @@ void buildStatus(DynamicJsonDocument &doc) {
+@@ -675,6 +685,9 @@ void buildStatus(DynamicJsonDocument &doc) {
    doc["service_level"] = static_cast<uint8_t>(evse.getActualServiceLevel());
    doc["limit"] = limit.hasLimit();
    doc["boost"] = boost.isActive();
@@ -3649,11 +4629,15 @@ index 32200661..9174213e 100644
  
    doc["ota_update"] = (int)Update.isRunning();
  
-@@ -2293,6 +2297,7 @@ void web_server_setup()
+@@ -2293,6 +2306,11 @@ void web_server_setup()
    server.on("/apoff$", handleAPOff);
    server.on("/divertmode$", handleDivertMode);
    server.on("/shaper$", handleCurrentShaper);
 +  server.on("/dimming$", handleDimming);
++#ifdef KINETOS_EXTRAS
++  kinetos_features_register(server);
++  kinetos_wled_register(server);
++#endif
    server.on("/emoncms/describe$", handleDescribe);
    server.on("/rfid/add$", handleAddRFID);
    server.on("/rfid/users$", handleRfidUsers);
