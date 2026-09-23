@@ -1635,10 +1635,10 @@ index 00000000..ad62e13a
 +#endif // KINETOS_CRASH_H
 diff --git a/src/kinetos/kinetos_extras.cpp b/src/kinetos/kinetos_extras.cpp
 new file mode 100644
-index 00000000..0c770398
+index 00000000..6b6b22fa
 --- /dev/null
 +++ b/src/kinetos/kinetos_extras.cpp
-@@ -0,0 +1,214 @@
+@@ -0,0 +1,225 @@
 +#ifdef KINETOS_EXTRAS
 +
 +#include <esp_system.h>
@@ -1733,6 +1733,7 @@ index 00000000..0c770398
 +    bool _enabled = false;
 +    bool _busy = false;
 +    uint32_t _lastWh = 0;
++    bool _ocppIdChecked = false;
 +
 +  protected:
 +    void setup() {}
@@ -1741,6 +1742,16 @@ index 00000000..0c770398
 +    {
 +      if(_busy || !evse.isConnected()) {
 +        return 1000;
++      }
++
++      // OCPP charge box ID: use the EVSE ID unless the user entered one
++      if(!_ocppIdChecked && evse.getChipId() && evse.getChipId()[0])
++      {
++        _ocppIdChecked = true;
++        if(0 == ocpp_chargeBoxId.length()) {
++          config_set("ocpp_chargeBoxId", kinetos_evse_id());
++          config_user_commit();
++        }
 +      }
 +      if(0 != strncmp(evse.getFirmwareVersion(), "8.", 2)) {
 +        return 10 * 1000; // only the Kinetos controller knows these commands
