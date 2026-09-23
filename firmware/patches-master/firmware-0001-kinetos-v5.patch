@@ -1,0 +1,3460 @@
+diff --git a/api.yml b/api.yml
+index 30ec7047..ae8ce3a8 100644
+--- a/api.yml
++++ b/api.yml
+@@ -756,6 +756,43 @@ paths:
+       operationId: limit_clear
+       tags:
+         - Limit
++  /dimming:
++    get:
++      summary: Get grid operator dimming state
++      description: 'Grid operator dimming (German §14a EnWG): while active, the charger is limited to `dimming_limit` W.'
++      operationId: dimming_get
++      tags:
++        - Dimming
++      responses:
++        '200':
++          description: Dimming state
++          content:
++            application/json:
++              schema:
++                $ref: '#/components/schemas/DimmingState'
++    post:
++      summary: Set the remote dimming request
++      description: 'Turns the remote (MQTT/HTTP) dimming request on or off. Not stored across restarts. The digital input, if configured, is OR-ed with this request.'
++      operationId: dimming_set
++      tags:
++        - Dimming
++      requestBody:
++        content:
++          text/plain:
++            schema:
++              type: string
++              enum: ['1', '0', 'on', 'off', 'true', 'false']
++      responses:
++        '200':
++          description: Request applied, returns the new state
++          content:
++            application/json:
++              schema:
++                $ref: '#/components/schemas/DimmingState'
++        '400':
++          description: Body is not 1/0, on/off or true/false
++        '409':
++          description: '`dimming_enabled` is false'
+   /loadsharing/peers:
+     get:
+       summary: List discovered and configured peers
+@@ -1437,6 +1474,39 @@ paths:
+           $ref: '#/components/responses/NotFound'
+ components:
+   schemas:
++    DimmingState:
++      title: Grid operator dimming state
++      type: object
++      properties:
++        enabled:
++          type: boolean
++          description: '`dimming_enabled` config option'
++        active:
++          type: boolean
++          description: The dimming limit is applied
++        source:
++          type: integer
++          description: '`0` none, `1` digital input, `2` MQTT/HTTP'
++        input:
++          type: boolean
++          description: Debounced state of the digital input
++        remote:
++          type: boolean
++          description: Remote (MQTT/HTTP) request
++        limit:
++          type: integer
++          description: '`dimming_limit` in W'
++        limit_a:
++          type: integer
++          description: Applied current limit in A, `0` when inactive
++      example:
++        enabled: true
++        active: true
++        source: 1
++        input: true
++        remote: false
++        limit: 4200
++        limit_a: 6
+     Message:
+       title: Informational message
+       type: object
+diff --git a/divert_sim/test_config.py b/divert_sim/test_config.py
+index 350c751d..0a1d9aaf 100644
+--- a/divert_sim/test_config.py
++++ b/divert_sim/test_config.py
+@@ -30,6 +30,17 @@ def test_config_defaults_present():
+     assert cfg["sntp_enabled"] is True
+     assert cfg["sntp_hostname"] == "time.cloudflare.com"
+     assert cfg["sntp_dhcp"] is True
++    # Unauthenticated control interface: must stay off unless the user enables it
++    assert cfg["modbus_tcp_enabled"] is False
++    assert cfg["modbus_tcp_port"] == 502
++
++
++def test_grid_dimming_defaults():
++    cfg = check_config()
++    assert cfg["dimming_enabled"] is False
++    assert cfg["dimming_limit"] == 4200
++    assert cfg["dimming_input_pin"] == 255
++    assert cfg["dimming_input_active_high"] is False
+ 
+ 
+ def test_config_round_trip_commit_and_load():
+diff --git a/docs/ai/feature-map.md b/docs/ai/feature-map.md
+index 14fb4d6e..e384935c 100644
+--- a/docs/ai/feature-map.md
++++ b/docs/ai/feature-map.md
+@@ -21,6 +21,7 @@ relative to the configured base topic (see [mqtt.md](../mqtt.md)).
+ | Solar divert / Eco mode | `divert.*` | `/settings/solar` | `divert_*` (`divert_enabled`, `divert_type`, `divert_PV_ratio`, smoothing/attack/decay, min charge time) | `/config`, `/status` (`solar`, `grid_ie`) | `divertmode/set`, solar/grid topics | [solar-divert.md](../user/solar-divert.md) |
+ | Current shaper (grid power cap) | `current_shaper.*` | `/settings/shaper` | `current_shaper_*` | `/config` | live power topic | [load-shaper.md](../user/load-shaper.md) |
+ | Local load sharing (controller/member groups) | `loadsharing_*`, `web_server_loadsharing.cpp`, `current_shaper.cpp` | `/settings/loadsharing` | `loadsharing_*` | `/loadsharing/peers`, `/loadsharing/peers/{host}`, `/loadsharing/discover`, `/loadsharing/status`, `/config` | — | [load-sharing.md](../user/load-sharing.md) |
++| Grid operator dimming (§14a EnWG: limit to `dimming_limit` W on a digital input or remote request) | `grid_dimming.*`, `grid_dimming_calc.*`, `web_server_dimming.cpp` | — (no UI yet) | `dimming_*` (`dimming_enabled`, `dimming_limit`, `dimming_input_pin`, `dimming_input_active_high`) | `/dimming`, `/status` (`dimming_active`, `dimming_source`, `dimming_limit_a`) | `dimming/set` | [grid-dimming.md](../user/grid-dimming.md) |
+ | Temperature throttling | `temp_throttle.*` | `/settings/safety` | `temp_throttle_*`, `over_temp_shutdown` | `/config` | — | [safety.md](../user/safety.md) |
+ | Safety checks (diode/GFCI/ground/relay/vent), boot lock, heartbeat | `evse_man.*`, controller | `/settings/safety` | `*_check` flags, `boot_lock`, `heartbeat_*` | `/config` | — | [safety.md](../user/safety.md) |
+ | Notifications (non-fault advisories: safety checks off, cleared faults, thermal, relay wear) | `notifications.*`, `notifications_rules.*`, `notifications_acks.*`, `web_server_notifications.cpp` | `/` (bell), `/settings/safety` (markers) — pending, paired GUI PR OpenEVSE/openevse-gui-nightshift#123 | `notification_acks`, `notification_acks_fw` (internal state, not user settings) | `/notifications`, `/notifications/ack`, `/status`, `/ws` | — | [notifications.md](../user/notifications.md) |
+@@ -30,6 +31,7 @@ relative to the configured base topic (see [mqtt.md](../mqtt.md)).
+ | MQTT integration (incl. Home Assistant) | `mqtt.*` | `/settings/mqtt` | `mqtt_*` | `/config`, `/status` | everything | [integrations.md](../user/integrations.md) |
+ | EmonCMS logging | `emoncms.*` | `/settings/emoncms` | `emoncms_*` | `/config`, `/status` | — | [integrations.md](../user/integrations.md) |
+ | OCPP 1.6 | `ocpp.*` | `/settings/ocpp` | `ocpp_*` | `/config` | — | [ocpp.md](../user/ocpp.md) |
++| Modbus TCP server for EMS (smart1-compatible register map, off by default, no auth) | `modbus_tcp.*`, `modbus_tcp_protocol.*` | — (no UI yet) | `modbus_tcp_enabled`, `modbus_tcp_port` | `/config`, `/claims` | — | [modbus-tcp.md](../user/modbus-tcp.md) |
+ | RFID authentication | `rfid.*` | `/settings/rfid` | `rfid_enabled`, `rfid_storage` | `/config`, RFID endpoints | `rfid/…` | [rfid.md](../user/rfid.md) |
+ | Vehicle SOC/range (Tesla / MQTT / OCPP sources) | `tesla_client.*`, `vehicle.*` | `/settings/vehicle` | `tesla_*`, `mqtt_vehicle_*`, `vehicle_data_src` | `/tesla/vehicles`, `/config` | vehicle topics | [vehicle.md](../user/vehicle.md) |
+ | WiFi / wired Ethernet / AP mode | `net_manager.*` | `/settings/network` | `ssid`, `pass`, `ap_*`, `hostname` | `/config`, `/scan`, `/status` | — | [getting-started.md](../user/getting-started.md) |
+diff --git a/docs/developer/architecture.md b/docs/developer/architecture.md
+index 81d3851a..721bea25 100644
+--- a/docs/developer/architecture.md
++++ b/docs/developer/architecture.md
+@@ -45,12 +45,13 @@ numeric priority (higher number = higher authority):
+ | 50 | Divert |
+ | 100 | Timer / Scheduler |
+ | 200 | Boost |
+-| 500 | API / MQTT |
++| 500 | API / MQTT / Modbus TCP |
+ | 1000 | Manual |
+ | 1030 | RFID |
+ | 1050 | OCPP |
+ | 1100 | Limit |
+ | 5000 | Safety |
++| 5100 | Grid operator dimming (`max_current` only; folds in any lower `max_current` from other claims) |
+ | 10000 | Error |
+ 
+ Client IDs are constructed with the `EVC(Vendor, Client)` macro. Each client
+@@ -117,8 +118,10 @@ unless `deserialize()` has marked the config modified.
+ | `limit.h/.cpp` | Session energy/time/SOC/range limits |
+ | `current_shaper.h/.cpp` | Grid-level power cap enforcement with smoothing |
+ | `temp_throttle.h/.cpp` | Current reduction on over-temperature |
++| `grid_dimming.h/.cpp` | Grid operator dimming (§14a EnWG) from a digital input, MQTT or HTTP |
+ | `notifications.h/.cpp`, `notifications_rules.h/.cpp`, `notifications_acks.h/.cpp` | Non-fault advisories: a pure rule table over EvseManager state, a 5 s MicroTask, and a persisted acknowledgement store |
+ | `ocpp.h/.cpp` | OCPP 1.6 via the MicroOcpp library |
++| `modbus_tcp.h/.cpp`, `modbus_tcp_protocol.h/.cpp` | Modbus TCP server for EMS (smart1 register map); frame handling and register map are pure and host-tested |
+ | `rfid.h/.cpp` | RFID card auth, PN532 NFC module (optional) |
+ | `net_manager.h/.cpp` | WiFi / wired Ethernet, OTA capability |
+ | `lcd.h/.cpp`, `lcd_lvgl.h/.cpp`, `src/lvgl_tft/` | Character LCD and LVGL TFT touchscreen display |
+diff --git a/docs/developer/building.md b/docs/developer/building.md
+index e2651176..60d04246 100644
+--- a/docs/developer/building.md
++++ b/docs/developer/building.md
+@@ -39,6 +39,7 @@ pio run -e nodemcu-32s
+ pio run -e olimex_esp32-gateway-e      # wired Ethernet
+ pio run -e openevse_wifi_tft_v1        # TFT touchscreen
+ pio run -e wt32-eth01                  # Ethernet (WT32)
++pio run -e wt32-eth01-kinetos          # Kinetos wallbox (WT32 + SDM630 MID meter)
+ pio run -e olimex_esp32-poe-iso        # Ethernet + PoE
+ ```
+ 
+@@ -207,3 +208,16 @@ cd divert_sim
+ pip install -r requirements.txt
+ pytest -v
+ ```
++
++### SDM630 energy meter (`ENABLE_SDM_METER`)
++
++Boards with an Eastron SDM630 / SDM72D-M (or compatible) meter on RS485 can read it over
++Modbus RTU. Build flags: `ENABLE_SDM_METER`, `SDM_METER_SERIAL` (default `Serial2`),
++`SDM_METER_RX`, `SDM_METER_TX`, `SDM_METER_BAUD` (9600), `SDM_METER_ADDRESS` (1). The RS485
++transceiver must switch direction by itself. When the meter answers, `/status` reports its
++values: `amp`/`voltage` (L1), `power` (total), `amp2`, `amp3`, `voltage2`, `voltage3`,
++`phases` (phases above 1 A), `meter_import_kwh`, `meter_valid`, `meter_present`, `meter_errors`, and the session
++energy is integrated from the measured total power. If the meter does not answer for 30 s
++(box sold without meter), `meter_present` turns `false`, the controller values are used and the
++meter is only probed once a minute. `DEBUG_PORT_NULL` sends debug output only to
++the web console, for boards where UART0 is the RAPI link.
+diff --git a/docs/mqtt.md b/docs/mqtt.md
+index 611f6f7e..c2a25874 100644
+--- a/docs/mqtt.md
++++ b/docs/mqtt.md
+@@ -58,6 +58,7 @@ Main settings:
+ 
+ `<base-topic>/divertmode/set [1 | 2]`       : normal (1)/ eco (2) divert mode  
+ `<base-topic>/shaper/set [0 | 1]`           : temporary enable (1)/ disable (0) current shaper ( doesn't survive reboot )  
++`<base-topic>/dimming/set [0 | 1]`          : grid operator dimming request on (1) / off (0), only when `dimming_enabled` ( doesn't survive reboot, see [grid-dimming.md](user/grid-dimming.md) )  
+ `<base-topic>/restart {"device": "gateway|evse"}` : restart the gateway or openevse module
+ 
+ Config:
+diff --git a/docs/user/grid-dimming.md b/docs/user/grid-dimming.md
+new file mode 100644
+index 00000000..1bd2dd3b
+--- /dev/null
++++ b/docs/user/grid-dimming.md
+@@ -0,0 +1,91 @@
++# Grid operator dimming (§14a EnWG)
++
++In Germany, §14a of the Energy Industry Act (EnWG) lets the grid operator
++reduce the power of a wallbox when the local grid is overloaded. In return you
++pay lower grid fees. The operator may reduce the charger to 4.2 kW, but never
++lower.
++
++When dimming is active, the charger limits its charge current so that it uses
++at most `dimming_limit` watts. Charging does not stop. All other features
++(solar divert, schedules, manual override, load shaper) keep working, but they
++cannot go above the dimming limit.
++
++## How the limit is calculated
++
++```
++current = dimming_limit / (230 V × phases)     (rounded down)
++```
++
++`phases` is 3 when *three-phase* (`is_threephase`) is set on the Charger
++settings page, otherwise 1. With the default 4200 W this is 18 A on one phase
++and 6 A on three phases. The result is never below the charger's minimum
++current (usually 6 A).
++
++## Turning dimming on
++
++Set `dimming_enabled` to `true` first. Dimming is then active when **any** of
++these sources asks for it:
++
++1. **Digital input** — a relay contact from the grid operator's control box
++   (e.g. the FNN control box).
++2. **MQTT** — publish `1` or `0` to `<base-topic>/dimming/set`.
++3. **HTTP** — `POST /dimming` with body `1` or `0`.
++
++The MQTT and HTTP requests are ignored while `dimming_enabled` is `false`.
++They are not stored: after a restart the remote request is off until it is
++sent again. For MQTT, publish the request as a *retained* message so the
++charger gets it again after a restart. `on`/`off` and `true`/`false` are also
++accepted.
++
++### Wiring the input
++
++Connect a potential-free (dry) relay contact between a free GPIO pin of the
++ESP32 and GND, and set `dimming_input_pin` to that GPIO number. The pin uses
++the internal pull-up, so a closed contact means "dim".
++
++If your control box gives an active-high signal instead, set
++`dimming_input_active_high` to `true` (the pin then uses the internal
++pull-down). The signal must be 3.3 V — never connect 5 V, 12 V or mains to an
++ESP32 pin.
++
++The input must be stable for 1 second before it counts, so short glitches are
++ignored.
++
++Notes:
++
++- Use a GPIO that your board does not use for anything else. Avoid the flash
++  pins (6–11) and the boot strapping pins (0, 2, 12, 15).
++- GPIO 34–39 have no internal pull-up/pull-down; add an external resistor if
++  you use one of them.
++
++## Checking the state
++
++`GET /dimming` returns the current state:
++
++```json
++{"enabled":true,"active":true,"source":1,"input":true,"remote":false,"limit":4200,"limit_a":6}
++```
++
++`/status`, the WebSocket and MQTT also report:
++
++| Field | Meaning |
++|---|---|
++| `dimming_active` | `true` while the limit is applied |
++| `dimming_source` | `0` none, `1` digital input, `2` MQTT/HTTP (the input wins when both are active) |
++| `dimming_limit_a` | Current limit in A while active, `0` otherwise |
++
++While dimming is active, `/claims` shows a claim from client `65551`
++(`EvseClient_OpenEVSE_GridDimming`) that sets `max_current`.
++
++## Settings
++
++There is no web UI page for these settings yet. Set them with `POST /config`
++or the MQTT `<base-topic>/config/set` topic, for example
++`{"dimming_enabled": true, "dimming_input_pin": 14}`.
++
++| Option | Type | Default | Description |
++|---|---|---|---|
++| `dimming_enabled` | bool | `false` | Turn the feature on |
++| `dimming_limit` | W | `4200` | Maximum charging power while dimmed |
++| `dimming_input_pin` | GPIO | `255` | Input pin, `255` = no input |
++| `dimming_input_active_high` | bool | `false` | `false`: contact to GND (active low, pull-up). `true`: active high (pull-down) |
+diff --git a/docs/user/index.md b/docs/user/index.md
+index d01a97d7..34704c83 100644
+--- a/docs/user/index.md
++++ b/docs/user/index.md
+@@ -23,11 +23,15 @@ UI — if your unit looks different, check
+ - [Load shaper](load-shaper.md) — stay under your grid connection's limit
+ - [Load sharing](load-sharing.md) — split one supply between several chargers
+   (Labs preview)
++- [Grid operator dimming](grid-dimming.md) — §14a EnWG power limit on request
++  of the grid operator
+ 
+ ## Integrations & access control
+ 
+ - [MQTT, Home Assistant, EmonCMS](integrations.md)
+ - [OCPP](ocpp.md) — connect to a charge-point management system
++- [Modbus TCP](modbus-tcp.md) — energy management systems (smart1-compatible
++  register map)
+ - [RFID](rfid.md) — card-based authorisation
+ - [Vehicle](vehicle.md) — state of charge and range from your car
+ 
+diff --git a/docs/user/integrations.md b/docs/user/integrations.md
+index 65349ac4..a14e50fc 100644
+--- a/docs/user/integrations.md
++++ b/docs/user/integrations.md
+@@ -45,3 +45,9 @@ endpoint with any of `voltage`, `shaper_live_pwr`, `solar`, `grid_ie`,
+ `battery_level`, `battery_range`, `time_to_full_charge`. The complete HTTP API
+ is documented at
+ [openevse.stoplight.io](https://openevse.stoplight.io/docs/openevse-wifi-v4/).
++
++## Modbus TCP
++
++Energy management systems can read the charger and set its charge power or
++current over Modbus TCP. It is off by default and has no authentication. See
++[Modbus TCP](modbus-tcp.md).
+diff --git a/docs/user/modbus-tcp.md b/docs/user/modbus-tcp.md
+new file mode 100644
+index 00000000..bfdf364b
+--- /dev/null
++++ b/docs/user/modbus-tcp.md
+@@ -0,0 +1,115 @@
++# Modbus TCP
++
++The charger can run a Modbus TCP server so that an energy management system
++(EMS) can read its status and set the charge power or current. The register
++map is compatible with the smart1 EMS register layout used by Kinetos
++wallboxes, so an EMS that supports those wallboxes can talk to OpenEVSE.
++
++## Security warning
++
++Modbus TCP has **no authentication and no encryption**. Anyone who can reach
++the port can start, stop and limit charging. The HTTP username and password
++do not protect it.
++
++- The server is **off by default**.
++- Only enable it on a trusted local network.
++- Never forward the port to the internet.
++
++## Enable it
++
++There is no settings page yet. Set the options with the `/config` API:
++
++```bash
++curl -X POST http://openevse.local/config \
++  -H 'Content-Type: application/json' \
++  -d '{"modbus_tcp_enabled": true}'
++```
++
++| Option | Default | Meaning |
++|---|---|---|
++| `modbus_tcp_enabled` | `false` | Start the Modbus TCP server |
++| `modbus_tcp_port` | `502` | TCP port |
++
++The server answers unit ID 1 (0 and 255 are accepted too). It supports
++function codes 3 and 4 (read) and 6 and 16 (write). Up to 4 clients can be
++connected at once; a client that sends nothing for 5 minutes is disconnected.
++
++Errors: unsupported function → exception 1, unknown register → exception 2,
++bad count or length → exception 3, other unit ID → exception 11.
++
++## Registers
++
++32-bit values use two registers, **low word first**. Unused addresses inside
++a block read as 0. Addresses outside the blocks return exception 2.
++
++### Status (999–1006, read)
++
++| Register | Meaning |
++|---|---|
++| 999 | Always 0 |
++| 1000 | State: 0 off/sleeping, 2 ready, 7 vehicle connected, 9 charging, 10/11 ventilation required, 12 charge finished, 13 error, 14 GFCI fault |
++| 1001 | Sub state: 0 idle, 1 waiting for RFID, 2 charging, 4 paused, 5 finished, 7 error |
++| 1002 | 1 = available, 0 = disabled or sleeping |
++| 1003 | 1 = free to use, 2/3 = RFID authorisation required |
++| 1004 | Maximum hardware current (A) |
++| 1005 | Maximum configured current (A) |
++| 1006 | Current charge current setpoint (A) |
++
++### Measurements (1099–1111, read)
++
++| Register | Meaning |
++|---|---|
++| 1099 | Always 0 |
++| 1100–1101 | Total power (W, 32 bit) |
++| 1102–1107 | Power L1, L2, L3 (W, 32 bit each). Read 0: there is no per-phase measurement yet |
++| 1108–1109 | Total energy (kWh, 32 bit) |
++| 1110 | Minimum current (A) |
++| 1111 | Controller fault state (OpenEVSE state number) while in error, else 0 |
++
++### Session (1199–1228, read)
++
++| Register | Meaning |
++|---|---|
++| 1220–1221 | Session energy (Wh, 32 bit) |
++| 1222 | Session duration (s, max 65535) |
++| 1224–1225 | Session start time as hhmmss (local time, 32 bit) |
++| 1226–1227 | Session stop time as hhmmss (local time, 32 bit) |
++| 1228 | Session: 0 none, 1 charging, 2 paused, 3 finished |
++
++1299–1327 is the second charge point of the layout and always reads 0.
++
++### Control (read and write)
++
++There are two blocks with the same layout. Use one of them.
++
++| Power block | Current block | Meaning |
++|---|---|---|
++| 1599 | 1999 | Setpoint. Power block: W, converted to amps with the measured voltage and 1 or 3 phases (`is_threephase`). Current block: 0.01 A, 600–8000 (6–80 A) |
++| 1600 | 2000 | 1 = pause while charging |
++| 1601 | 2001 | 1 = enable charging, 2 = disable charging |
++| 1602 | 2002 | Watchdog timeout (s), 0 = off |
++
++- Writes act like any other API client: OpenEVSE uses a claim with API
++  priority, so manual override, RFID, OCPP, limits and safety still win. The
++  claim shows up in `/claims` as client 65552 (`0x10010`).
++- The setpoint is clamped to the charger's minimum and maximum current.
++- Watchdog: if a timeout is set and no new setpoint arrives in time, charging
++  is paused. Write start/stop = 1 again to resume.
++- OpenEVSE extension: when setpoint, pause and start/stop are 0 in **both**
++  blocks, OpenEVSE releases the claim and the charger goes back to its normal
++  behaviour (schedule, solar divert, …).
++- A write to several registers with function 16 is applied as one command.
++
++## Example
++
++Read the status block with [mbpoll](https://github.com/epsilonrt/mbpoll):
++
++```bash
++mbpoll -m tcp -a 1 -r 1000 -c 7 -0 -1 openevse.local
++```
++
++Set 10 A with a 60 s watchdog and enable charging (function 16):
++
++```bash
++mbpoll -m tcp -a 1 -r 1999 -0 -1 openevse.local 1000 0 1 60
++```
+diff --git a/docs/user/settings.md b/docs/user/settings.md
+index 7c82ee9a..4fb895e5 100644
+--- a/docs/user/settings.md
++++ b/docs/user/settings.md
+@@ -49,6 +49,8 @@ hardware is present.
+   Terminal) — see [Load sharing](load-sharing.md).
+ - **[EmonCMS](screenshots/settings-emoncms-dark-desktop.png)** — see
+   [Integrations](integrations.md).
++- **Grid operator dimming** (no UI page yet; set through `/config`) — see
++  [Grid operator dimming](grid-dimming.md).
+ 
+ ## System
+ 
+diff --git a/models/Config.yaml b/models/Config.yaml
+index 6a544015..0cfe6c7d 100644
+--- a/models/Config.yaml
++++ b/models/Config.yaml
+@@ -340,6 +340,26 @@ properties:
+     type: boolean
+     description: |
+      Needs to be enabled if charging with 3 phases setup for proper calculations
++  dimming_enabled:
++    type: boolean
++    default: false
++    description: |
++      Enable grid operator dimming (German §14a EnWG). See docs/user/grid-dimming.md
++  dimming_limit:
++    type: integer
++    default: 4200
++    description: |
++      Maximum charging power in W while grid operator dimming is active
++  dimming_input_pin:
++    type: integer
++    default: 255
++    description: |
++      ESP32 GPIO used as the dimming input, 255 = no input
++  dimming_input_active_high:
++    type: boolean
++    default: false
++    description: |
++      `false`: dry contact to GND, active low with internal pull-up. `true`: active high with internal pull-down
+   wizard_passed:
+     type: boolean
+     description: |
+diff --git a/models/Status.yaml b/models/Status.yaml
+index 2018971a..09719e6b 100644
+--- a/models/Status.yaml
++++ b/models/Status.yaml
+@@ -152,6 +152,15 @@ properties:
+   divert_active:
+     type: boolean
+     description: '`true` if divert is actively enabling charging, `false` if not'
++  dimming_active:
++    type: boolean
++    description: '`true` while grid operator dimming limits the charge current'
++  dimming_source:
++    type: integer
++    description: 'What requested dimming: `0` none, `1` digital input, `2` MQTT/HTTP'
++  dimming_limit_a:
++    type: integer
++    description: Current limit in A applied by grid operator dimming, `0` when inactive
+   ota_update:
+     type: integer
+     description: '`1`, if there is an OTA update active, `0` if normal operation'
+diff --git a/platformio.ini b/platformio.ini
+index 1b50a943..3afb045f 100644
+--- a/platformio.ini
++++ b/platformio.ini
+@@ -456,6 +456,40 @@ build_flags =
+   -D ETH_CLK_MODE=ETH_CLOCK_GPIO0_IN
+   -D ETH_PHY_POWER=16
+ 
++[env:wt32-eth01-kinetos]
++# Kinetos wallbox (Bond Electronics "EV Charge Control" board with WT32-ETH01 and MID meter).
++# Pins taken from the original Kinetos firmware; UART0 is wired to the EVSE controller.
++board = wt32-eth01
++lib_deps =
++  ${common.lib_deps}
++  ${common.neopixel_lib}
++  ${common.ws2812fx_lib}
++build_flags =
++  ${common.build_flags}
++  -D RAPI_PORT=Serial
++  -D DEBUG_PORT_NULL
++  -D WIFI_BUTTON=39
++  -D WIFI_BUTTON_PRESSED_STATE=LOW
++  -D NEO_PIXEL_PIN=4
++  -D NEO_PIXEL_LENGTH=7
++  -D ENABLE_WS2812FX
++  -D WIFI_PIXEL_NUMBER=1
++  -D I2C_SDA=33
++  -D I2C_SCL=32
++  -D ENABLE_PN532
++  -D ENABLE_SDM_METER
++  -D SDM_METER_SERIAL=Serial2
++  -D SDM_METER_RX=35
++  -D SDM_METER_TX=17
++  -D ENABLE_WIRED_ETHERNET
++  -D RESET_ETH_PHY_ON_BOOT=1
++  -D ETH_PHY_TYPE=ETH_PHY_LAN8720
++  -D ETH_PHY_ADDR=1
++  -D ETH_PHY_MDC=23
++  -D ETH_PHY_MDIO=18
++  -D ETH_CLK_MODE=ETH_CLOCK_GPIO0_IN
++  -D ETH_PHY_POWER=16
++
+ [env:wt32-eth01-ws2812]
+ # For Wireless Tag
+ board = wt32-eth01
+@@ -688,7 +722,7 @@ platform = native
+ framework =
+ test_framework = doctest
+ test_build_src = true
+-build_src_filter = -<*> +<tsdb_sample.cpp> +<home_battery.cpp> +<lvgl_tft/backlight.cpp> +<loadsharing_algorithm.cpp> +<crypto/sha256.c> +<crypto/hmac_sha256.cpp> +<web_auth.cpp> +<ota_url_allow.cpp> +<http_etag.cpp> +<fault_text.cpp> +<charge_threshold.cpp> +<notifications_rules.cpp> +<notifications_acks.cpp>
++build_src_filter = -<*> +<tsdb_sample.cpp> +<home_battery.cpp> +<lvgl_tft/backlight.cpp> +<loadsharing_algorithm.cpp> +<crypto/sha256.c> +<crypto/hmac_sha256.cpp> +<web_auth.cpp> +<ota_url_allow.cpp> +<http_etag.cpp> +<fault_text.cpp> +<charge_threshold.cpp> +<notifications_rules.cpp> +<notifications_acks.cpp> +<grid_dimming_calc.cpp> +<modbus_tcp_protocol.cpp>
+ build_flags =
+   -std=gnu++17
+   -I src/lvgl_tft
+@@ -829,3 +863,12 @@ lib_ignore =
+   EpoxymDNS
+   ArduinoMongoose
+ lib_compat_mode = off
++
++# Kinetos OpenEVSE V5: the Kinetos board plus PV share on the LED ring, Home Assistant
++# discovery, panic trap and the settings migration from Kinetos V5 rev <= 8
++[env:kinetos-v5]
++extends = env:wt32-eth01-kinetos
++build_flags =
++  ${env:wt32-eth01-kinetos.build_flags}
++  -D KINETOS_EXTRAS
++  -Wl,--wrap=esp_panic_handler
+diff --git a/src/LedManagerTask.cpp b/src/LedManagerTask.cpp
+index 33f3a774..ef7c568b 100644
+--- a/src/LedManagerTask.cpp
++++ b/src/LedManagerTask.cpp
+@@ -29,6 +29,9 @@
+ #include "debug.h"
+ #include "emonesp.h"
+ #include "LedManagerTask.h"
++#ifdef KINETOS_EXTRAS
++#include "kinetos/kinetos_led.h"
++#endif
+ 
+ #if defined(NEO_PIXEL_PIN) && defined(NEO_PIXEL_LENGTH) && !defined(ENABLE_WS2812FX)
+ #include <Adafruit_NeoPixel.h>
+@@ -326,6 +329,13 @@ unsigned long LedManagerTask::loop(MicroTasks::WakeReason reason)
+           isCharging = _evse->isCharging();
+           isError = _evse->isError();
+           if(isCharging){
++#ifdef KINETOS_EXTRAS
++            uint8_t fxMode = FX_MODE_COLOR_WIPE;
++            if(kinetos_led_charging(col, fxMode, speed)) {
++              setAllRGB(col, fxMode, speed);
++              return 5000; // re-evaluate the PV share
++            }
++#endif
+             setAllRGB(col, FX_MODE_COLOR_WIPE, speed);
+           } else if(isError){
+             setAllRGB(col, FX_MODE_FADE, DEFAULT_FX_SPEED);
+diff --git a/src/app_config.cpp b/src/app_config.cpp
+index da5c7738..70263ba0 100644
+--- a/src/app_config.cpp
++++ b/src/app_config.cpp
+@@ -11,7 +11,9 @@
+ #include "app_config_mode.h"
+ #include "certificates.h"
+ #include "temp_throttle.h"
++#include "grid_dimming.h"
+ #include "flash_migrate.h"
++#include "kinetos/kinetos_extras.h"
+ 
+ #include "web_auth_secret.h"
+ 
+@@ -26,6 +28,7 @@
+ #include "input.h"
+ #include "LedManagerTask.h"
+ #include "current_shaper.h"
++#include "modbus_tcp.h"
+ 
+ #include "limit.h"
+ #endif
+@@ -162,6 +165,12 @@ uint64_t tesla_expires_in;
+ 
+ String tesla_vehicle_id;
+ 
++// Grid operator dimming
++bool dimming_enabled;
++uint8_t dimming_input_pin;
++bool dimming_input_active_high;
++uint32_t dimming_limit;
++
+ // Vehicle
+ uint8_t vehicle_data_src;
+ 
+@@ -194,6 +203,10 @@ String loadsharing_role;
+ String loadsharing_controller_host;
+ uint32_t loadsharing_rotation_interval;
+ 
++// Modbus TCP server
++bool modbus_tcp_enabled;
++uint32_t modbus_tcp_port;
++
+ // Advisory acknowledgements: "key:hextoken;" repeated, plus the firmware
+ // version that wrote them. A version change drops the lot - a firmware
+ // update is a service event, where a power cut is not.
+@@ -321,6 +334,12 @@ ConfigOpt *opts[] =
+   new ConfigOptDefinition<uint32_t>(heartbeat_interval_cfg, 5, "heartbeat_interval", "hbi"),
+   new ConfigOptDefinition<uint32_t>(heartbeat_current_cfg, 6, "heartbeat_current", "hbc"),
+ 
++// Grid operator dimming settings
++  new ConfigOptDefinition<bool>(dimming_enabled, false, "dimming_enabled", "dme"),
++  new ConfigOptDefinition<uint8_t>(dimming_input_pin, GRID_DIMMING_PIN_NONE, "dimming_input_pin", "dmp"),
++  new ConfigOptDefinition<bool>(dimming_input_active_high, false, "dimming_input_active_high", "dmh"),
++  new ConfigOptDefinition<uint32_t>(dimming_limit, GRID_DIMMING_LIMIT_DEFAULT, "dimming_limit", "dml"),
++
+ // Vehicle settings
+   new ConfigOptDefinition<uint8_t>(vehicle_data_src, 0, "vehicle_data_src", "vds"),
+ 
+@@ -355,6 +374,14 @@ ConfigOpt *opts[] =
+   // Rotation interval in seconds (0 disables). Effective max ~49 days on 32-bit millis; larger values wrap.
+   new ConfigOptDefinition<uint32_t>(loadsharing_rotation_interval, 1800, "loadsharing_rotation_interval", "lsri"),
+ 
++// Modbus TCP server. Off by default: it is an unauthenticated control interface.
++  new ConfigOptDefinition<bool>(modbus_tcp_enabled, false, "modbus_tcp_enabled", "mte"),
++  new ConfigOptDefinition<uint32_t>(modbus_tcp_port, 502, "modbus_tcp_port", "mtp"),
++
++#ifdef KINETOS_EXTRAS
++  KINETOS_CONFIG_OPTS
++#endif
++
+ // Advisory acknowledgements: "key:hextoken;" repeated, plus the firmware
+ // version that wrote them. A version change drops the lot - a firmware
+ // update is a service event, where a power cut is not.
+@@ -455,6 +482,12 @@ config_load_settings()
+ #endif
+   }
+ 
++#ifdef KINETOS_EXTRAS
++  if(kinetos_config_migrate(flags_changed, CONFIG_DEFAULT_FLAGS)) {
++    user_config.commit();
++  }
++#endif
++
+   // Handle setting the newly added flag changed bits
+   if(0 == flags_changed)
+   {
+@@ -542,8 +575,12 @@ void config_changed(String name)
+     }
+   } else if(name.startsWith("current_shaper_")) {
+     shaper.notifyConfigChanged(config_current_shaper_enabled()?1:0,current_shaper_max_pwr);
++  } else if(name.startsWith("modbus_tcp_")) {
++    modbusTcp.notifyConfigChanged();
+   } else if(name.startsWith("temp_throttle_")) {
+     tempThrottle.notifyConfigChanged(config_temp_throttle_enabled(), temp_throttle_setpoint);
++  } else if(name.startsWith("dimming_")) {
++    gridDimming.notifyConfigChanged();
+   } else if(name == "tesla_vehicle_id") {
+     teslaClient.setVehicleId(tesla_vehicle_id);
+   } else if(name.startsWith("tesla_")) {
+diff --git a/src/app_config.h b/src/app_config.h
+index a89eb032..bfcadcf7 100644
+--- a/src/app_config.h
++++ b/src/app_config.h
+@@ -127,6 +127,10 @@ extern String loadsharing_role;
+ extern String loadsharing_controller_host;
+ extern uint32_t loadsharing_rotation_interval;
+ 
++// Modbus TCP server (no authentication, off by default)
++extern bool modbus_tcp_enabled;
++extern uint32_t modbus_tcp_port;
++
+ // Advisory acknowledgements (internal state, not a /config setting)
+ extern String notification_acks;
+ extern String notification_acks_fw;
+@@ -150,6 +154,13 @@ extern uint32_t over_temp_shutdown;
+ // Voltage for power calculations (centivolt, 0 = use EVSE default)
+ extern uint32_t voltage_cfg;
+ 
++// Grid operator dimming (grid_dimming.h). Plain bools rather than flag
++// bits: every bit of `flags` is taken.
++extern bool dimming_enabled;
++extern uint8_t dimming_input_pin;
++extern bool dimming_input_active_high;
++extern uint32_t dimming_limit;
++
+ // Vehicle
+ extern uint8_t vehicle_data_src;
+ 
+diff --git a/src/debug.cpp b/src/debug.cpp
+index 8343c6ed..c35343ab 100644
+--- a/src/debug.cpp
++++ b/src/debug.cpp
+@@ -44,6 +44,25 @@ extern "C" void debug_set_rapi_path(const char* path) {
+ #endif
+ #endif
+ 
++#ifdef DEBUG_PORT_NULL
++// For boards where UART0 is wired to the EVSE controller and no other UART pin is free:
++// debug output then only goes to the web console buffer, never to a pin.
++class NullSerial : public Stream
++{
++  public:
++    void begin(unsigned long) {}
++    int available() { return 0; }
++    int read() { return -1; }
++    int peek() { return -1; }
++    void flush() {}
++    size_t write(uint8_t) { return 1; }
++    size_t write(const uint8_t *, size_t size) { return size; }
++};
++static NullSerial NullDebugPort;
++#undef DEBUG_PORT
++#define DEBUG_PORT NullDebugPort
++#endif
++
+ StreamSpy SerialDebug(DEBUG_PORT);
+ StreamSpy SerialEvse(RAPI_PORT);
+ 
+diff --git a/src/energy_meter.cpp b/src/energy_meter.cpp
+index ae836982..0d24ff16 100644
+--- a/src/energy_meter.cpp
++++ b/src/energy_meter.cpp
+@@ -5,6 +5,9 @@
+ #include <sys/time.h>
+ 
+ #include "energy_meter.h"
++#ifdef ENABLE_SDM_METER
++#include "sdm_meter.h"
++#endif
+ #include "fs_util.h"
+ #include "evse_monitor.h"
+ 
+@@ -242,6 +245,13 @@ bool EnergyMeter::update()
+       // Multiply calculation by 3 to get 3-phase energy.
+       mws *= 3;
+     }
++#ifdef ENABLE_SDM_METER
++    if (sdmMeter.isValid())
++    {
++      // Real total power from the meter, correct for 1-, 2- and 3-phase charging
++      mws = sdmMeter.get(SdmMeter::PowerTotal) * dms;
++    }
++#endif
+ 
+     // convert to w/h
+     double wh = mws / 3600000;
+diff --git a/src/evse_man.cpp b/src/evse_man.cpp
+index fd67f599..5d532f9f 100644
+--- a/src/evse_man.cpp
++++ b/src/evse_man.cpp
+@@ -623,6 +623,29 @@ uint32_t EvseManager::getMaxCurrent(EvseClient client)
+   return getClaimProperties(client).getMaxCurrent();
+ }
+ 
++// Same selection as evaluateClaims(): the highest-priority claim that sets a
++// max_current wins.
++uint32_t EvseManager::getMaxCurrentExcluding(EvseClient exclude)
++{
++  uint32_t max_current = UINT32_MAX;
++  int priority = 0;
++
++  for(size_t i = 0; i < EVSE_MANAGER_MAX_CLIENT_CLAIMS; i++)
++  {
++    Claim &claim = _clients[i];
++    if(claim.isValid() &&
++       claim.getClient() != exclude &&
++       claim.getPriority() > priority &&
++       claim.getMaxCurrent() != UINT32_MAX)
++    {
++      max_current = claim.getMaxCurrent();
++      priority = claim.getPriority();
++    }
++  }
++
++  return max_current;
++}
++
+ void EvseManager::setVehicleStateOfCharge(int vehicleStateOfCharge)
+ {
+   _vehicleStateOfCharge = vehicleStateOfCharge;
+diff --git a/src/evse_man.h b/src/evse_man.h
+index c613e001..3492fd94 100644
+--- a/src/evse_man.h
++++ b/src/evse_man.h
+@@ -38,6 +38,8 @@ typedef uint32_t EvseClient;
+ #define EvseClient_OpenEVSE_Shaper            EVC(EvseClient_Vendor_OpenEVSE, 0x000C)
+ #define EvseClient_OpenEVSE_TempThrottle      EVC(EvseClient_Vendor_OpenEVSE, 0x000D)
+ #define EvseClient_OpenEVSE_LoadSharing       EVC(EvseClient_Vendor_OpenEVSE, 0x000E)
++#define EvseClient_OpenEVSE_GridDimming       EVC(EvseClient_Vendor_OpenEVSE, 0x000F)
++#define EvseClient_OpenEVSE_ModbusTcp         EVC(EvseClient_Vendor_OpenEVSE, 0x0010)
+ 
+ #define EvseClient_OpenEnergyMonitor_DemandShaper EVC(EvseClient_Vendor_OpenEnergyMonitor, 0x0001)
+ 
+@@ -62,6 +64,11 @@ typedef uint32_t EvseClient;
+ #define EvseManager_Priority_OCPP     1050
+ #define EvseManager_Priority_Limit    1100
+ #define EvseManager_Priority_Safety   5000
++// Grid operator dimming (grid_dimming.h) must outrank the Safety-level
++// max_current claims of the shaper and load sharing, or their higher cap
++// would replace the dimming limit. It folds their value in instead, so it
++// never raises a lower cap (see EvseManager::getMaxCurrentExcluding()).
++#define EvseManager_Priority_GridDimming 5100
+ #define EvseManager_Priority_Error   10000
+ 
+ #define EVSE_VEHICLE_SOC    (1 << 0)
+@@ -292,6 +299,9 @@ class EvseManager : public MicroTasks::Task
+     EvseState getState(EvseClient client = EvseClient_NULL);
+     uint32_t getChargeCurrent(EvseClient client = EvseClient_NULL);
+     uint32_t getMaxCurrent(EvseClient client = EvseClient_NULL);
++    // The max_current the claims other than `exclude` resolve to, UINT32_MAX
++    // if none of them sets one.
++    uint32_t getMaxCurrentExcluding(EvseClient exclude);
+ 
+     // Get the client whose claim is currently setting the state/charge current,
+     // EvseClient_NULL if no active claim sets the property
+diff --git a/src/evse_monitor.cpp b/src/evse_monitor.cpp
+index 64a7a1dc..019bf9a4 100644
+--- a/src/evse_monitor.cpp
++++ b/src/evse_monitor.cpp
+@@ -1117,6 +1117,13 @@ void EvseMonitor::getChargeCurrentAndVoltageFromEvse()
+         if (config_threephase_enabled()) {
+           _power = _power * 3;
+         }
++#ifdef ENABLE_SDM_METER
++        if(sdmMeter.isValid()) {
++          _amp = sdmMeter.get(SdmMeter::CurrentL1);
++          _voltage = sdmMeter.get(SdmMeter::VoltageL1);
++          _power = sdmMeter.get(SdmMeter::PowerTotal);
++        }
++#endif
+ 
+         StaticJsonDocument<64> event;
+         event["amp"] = _amp * AMPS_SCALE_FACTOR;;
+diff --git a/src/evse_monitor.h b/src/evse_monitor.h
+index cea8e788..f795afb7 100644
+--- a/src/evse_monitor.h
++++ b/src/evse_monitor.h
+@@ -5,6 +5,9 @@
+ #include <openevse.h>
+ #include <MicroTasks.h>
+ #include "energy_meter.h"
++#ifdef ENABLE_SDM_METER
++#include "sdm_meter.h"
++#endif
+ 
+ #ifdef ENABLE_MCP9808
+ #include <Wire.h>
+@@ -426,6 +429,12 @@ class EvseMonitor : public MicroTasks::Task
+       return _amp;
+     }
+     double getVoltage() {
++#ifdef ENABLE_SDM_METER
++      // The controller only knows its configured voltage; the meter measures it
++      if(sdmMeter.isValid()) {
++        return sdmMeter.get(SdmMeter::VoltageL1);
++      }
++#endif
+       return _voltage;
+     }
+     double getPower() {
+diff --git a/src/grid_dimming.cpp b/src/grid_dimming.cpp
+new file mode 100644
+index 00000000..22fe50f7
+--- /dev/null
++++ b/src/grid_dimming.cpp
+@@ -0,0 +1,180 @@
++#if defined(ENABLE_DEBUG) && !defined(ENABLE_DEBUG_GRID_DIMMING)
++#undef ENABLE_DEBUG
++#endif
++
++#include "grid_dimming.h"
++#include "grid_dimming_calc.h"
++#include "event.h"
++#include "debug.h"
++
++GridDimming gridDimming;
++
++GridDimming::GridDimming() :
++  MicroTasks::Task(),
++  _evse(nullptr),
++  _pin_cfg(GRID_DIMMING_PIN_NONE),
++  _pin(GRID_DIMMING_PIN_NONE),
++  _pin_active_high(false),
++  _input_raw(false),
++  _input_changed(0),
++  _input_active(false),
++  _remote_active(false),
++  _active(false),
++  _source(None),
++  _limit_amps(0),
++  _claimed(false),
++  _claimed_amps(0)
++{
++}
++
++void GridDimming::begin(EvseManager &evse)
++{
++  _evse = &evse;
++  MicroTask.startTask(this);
++}
++
++void GridDimming::setup()
++{
++}
++
++bool GridDimming::setRemote(bool active)
++{
++  if(!dimming_enabled) {
++    return false;
++  }
++  _remote_active = active;
++  if(_evse) {
++    // Apply now so the caller sees the new state, then let loop() take over
++    apply();
++  }
++  MicroTask.wakeTask(this);
++  return true;
++}
++
++void GridDimming::notifyConfigChanged()
++{
++  MicroTask.wakeTask(this);
++}
++
++void GridDimming::updateInput()
++{
++  bool valid = dimming_input_pin <= GRID_DIMMING_MAX_PIN;
++
++  if(dimming_input_pin != _pin_cfg || dimming_input_active_high != _pin_active_high)
++  {
++    _pin_cfg = dimming_input_pin;
++    _pin = valid ? dimming_input_pin : GRID_DIMMING_PIN_NONE;
++    _pin_active_high = dimming_input_active_high;
++    if(valid) {
++      // Default wiring is a potential-free contact between the pin and GND:
++      // active low with the internal pull-up.
++      pinMode(_pin, _pin_active_high ? INPUT_PULLDOWN : INPUT_PULLUP);
++    }
++    _input_raw = false;
++    _input_active = false;
++    _input_changed = millis();
++    DBUGF("GridDimming: input pin %u, active %s", _pin, _pin_active_high ? "high" : "low");
++  }
++
++  if(GRID_DIMMING_PIN_NONE == _pin) {
++    _input_active = false;
++    return;
++  }
++
++  bool raw = digitalRead(_pin) == (_pin_active_high ? HIGH : LOW);
++  if(raw != _input_raw) {
++    _input_raw = raw;
++    _input_changed = millis();
++  }
++  if(raw != _input_active &&
++     (long)(millis() - (_input_changed + GRID_DIMMING_DEBOUNCE_TIME)) >= 0)
++  {
++    _input_active = raw;
++  }
++}
++
++void GridDimming::apply()
++{
++  bool active = dimming_enabled && (_input_active || _remote_active);
++  Source source = !active ? None : (_input_active ? Input : Remote);
++  uint32_t limit_amps = 0;
++
++  if(active)
++  {
++    uint8_t phases = config_threephase_enabled() ? 3 : 1;
++    limit_amps = grid_dimming_limit_amps(dimming_limit, phases, (uint32_t)_evse->getMinCurrent());
++
++    // Our claim outranks the shaper/load sharing, so keep any lower cap they set
++    uint32_t claim_amps = limit_amps;
++    uint32_t other = _evse->getMaxCurrentExcluding(EvseClient_OpenEVSE_GridDimming);
++    if(other < claim_amps) {
++      claim_amps = other;
++    }
++
++    if(!_claimed || claim_amps != _claimed_amps)
++    {
++      EvseProperties props;
++      props.setMaxCurrent(claim_amps);
++      _evse->claim(EvseClient_OpenEVSE_GridDimming, EvseManager_Priority_GridDimming, props);
++      _claimed = true;
++      _claimed_amps = claim_amps;
++    }
++  }
++  else if(_claimed)
++  {
++    _evse->release(EvseClient_OpenEVSE_GridDimming);
++    _claimed = false;
++    _claimed_amps = 0;
++  }
++
++  if(active != _active || source != _source || limit_amps != _limit_amps)
++  {
++    DBUGF("GridDimming: %s, source %d, %u A", active ? "active" : "inactive", source, limit_amps);
++    _active = active;
++    _source = source;
++    _limit_amps = limit_amps;
++
++    StaticJsonDocument<128> event;
++    event["dimming_active"] = _active;
++    event["dimming_source"] = (uint8_t)_source;
++    event["dimming_limit_a"] = _limit_amps;
++    event_send(event);
++  }
++}
++
++unsigned long GridDimming::loop(MicroTasks::WakeReason reason)
++{
++  if(!_evse) {
++    return MicroTask.Infinate;
++  }
++
++  if(!dimming_enabled)
++  {
++    _input_active = false;
++    _remote_active = false;
++    apply();
++    // notifyConfigChanged() wakes us when it is turned on
++    return MicroTask.Infinate;
++  }
++
++  updateInput();
++  apply();
++
++  // Poll the input for debouncing; while active also track the phase setting
++  // and the other max_current claims we fold in.
++  if(GRID_DIMMING_PIN_NONE != _pin || _active) {
++    return GRID_DIMMING_LOOP_TIME;
++  }
++  return MicroTask.Infinate;
++}
++
++void GridDimming::serialize(JsonDocument &doc)
++{
++  doc["enabled"] = dimming_enabled;
++  doc["active"] = _active;
++  doc["source"] = (uint8_t)_source;
++  doc["input"] = _input_active;
++  doc["remote"] = _remote_active;
++  doc["limit"] = dimming_limit;
++  doc["limit_a"] = _limit_amps;
++}
+diff --git a/src/grid_dimming.h b/src/grid_dimming.h
+new file mode 100644
+index 00000000..5228cfc2
+--- /dev/null
++++ b/src/grid_dimming.h
+@@ -0,0 +1,85 @@
++#ifndef _OPENEVSE_GRID_DIMMING_H
++#define _OPENEVSE_GRID_DIMMING_H
++
++// Grid operator dimming, e.g. German §14a EnWG: while the grid operator asks
++// for it, the charger is limited to `dimming_limit` watts (4200 W by default,
++// the minimum §14a guarantees). The request comes from a digital input (the
++// operator's control box relay) or remotely over MQTT/HTTP; either one turns
++// dimming on.
++
++#ifndef GRID_DIMMING_LIMIT_DEFAULT
++#define GRID_DIMMING_LIMIT_DEFAULT 4200
++#endif
++
++// dimming_input_pin value for "no input"
++#define GRID_DIMMING_PIN_NONE 255
++
++#ifndef GRID_DIMMING_MAX_PIN
++#define GRID_DIMMING_MAX_PIN 39
++#endif
++
++#ifndef GRID_DIMMING_DEBOUNCE_TIME
++#define GRID_DIMMING_DEBOUNCE_TIME 1000
++#endif
++
++#ifndef GRID_DIMMING_LOOP_TIME
++#define GRID_DIMMING_LOOP_TIME 250
++#endif
++
++#include "emonesp.h"
++#include <MicroTasks.h>
++#include "evse_man.h"
++#include "app_config.h"
++
++class GridDimming : public MicroTasks::Task
++{
++  public:
++    enum Source {
++      None = 0,
++      Input = 1,
++      Remote = 2
++    };
++
++  private:
++    EvseManager *_evse;
++    uint8_t      _pin_cfg;          // dimming_input_pin as last seen
++    uint8_t      _pin;              // pin in use, GRID_DIMMING_PIN_NONE if none/invalid
++    bool         _pin_active_high;  // polarity the pin was configured for
++    bool         _input_raw;        // last raw (not debounced) input level, true = asserted
++    unsigned long _input_changed;   // millis() of the last raw input change
++    bool         _input_active;     // debounced input state
++    bool         _remote_active;    // state last set over MQTT/HTTP
++    bool         _active;           // state last published
++    Source       _source;           // source last published
++    uint32_t     _limit_amps;       // dimming limit last published, 0 when inactive
++    bool         _claimed;          // we hold an EvseManager claim
++    uint32_t     _claimed_amps;     // max_current of that claim
++
++    void updateInput();
++    void apply();
++
++  protected:
++    void setup();
++    unsigned long loop(MicroTasks::WakeReason reason);
++
++  public:
++    GridDimming();
++    void begin(EvseManager &evse);
++
++    // Returns false (and ignores the request) when dimming is disabled
++    bool setRemote(bool active);
++    void notifyConfigChanged();
++
++    // Applied state, as published in the status/events
++    bool isActive() { return _active; }
++    Source getSource() { return _source; }
++    bool isInputActive() { return _input_active; }
++    bool isRemoteActive() { return _remote_active; }
++    uint32_t getLimitAmps() { return _limit_amps; }
++
++    void serialize(JsonDocument &doc);
++};
++
++extern GridDimming gridDimming;
++
++#endif // _OPENEVSE_GRID_DIMMING_H
+diff --git a/src/grid_dimming_calc.cpp b/src/grid_dimming_calc.cpp
+new file mode 100644
+index 00000000..5ccf01ff
+--- /dev/null
++++ b/src/grid_dimming_calc.cpp
+@@ -0,0 +1,45 @@
++#include "grid_dimming_calc.h"
++
++#include <ctype.h>
++#include <string.h>
++#include <strings.h>
++
++uint32_t grid_dimming_limit_amps(uint32_t limit_w, uint8_t phases, uint32_t min_amps)
++{
++  if(0 == phases) {
++    phases = 1;
++  }
++  uint32_t amps = limit_w / ((uint32_t)GRID_DIMMING_NOMINAL_VOLTAGE * phases);
++  return amps < min_amps ? min_amps : amps;
++}
++
++bool grid_dimming_parse_state(const char *payload, bool &active)
++{
++  if(nullptr == payload) {
++    return false;
++  }
++
++  while(isspace((unsigned char)*payload)) {
++    payload++;
++  }
++  size_t len = strlen(payload);
++  while(len > 0 && isspace((unsigned char)payload[len - 1])) {
++    len--;
++  }
++
++  static const char *const on[] = { "1", "on", "true" };
++  static const char *const off[] = { "0", "off", "false" };
++  for(size_t i = 0; i < sizeof(on) / sizeof(on[0]); i++)
++  {
++    if(strlen(on[i]) == len && 0 == strncasecmp(payload, on[i], len)) {
++      active = true;
++      return true;
++    }
++    if(strlen(off[i]) == len && 0 == strncasecmp(payload, off[i], len)) {
++      active = false;
++      return true;
++    }
++  }
++
++  return false;
++}
+diff --git a/src/grid_dimming_calc.h b/src/grid_dimming_calc.h
+new file mode 100644
+index 00000000..2933705c
+--- /dev/null
++++ b/src/grid_dimming_calc.h
+@@ -0,0 +1,24 @@
++#ifndef _OPENEVSE_GRID_DIMMING_CALC_H
++#define _OPENEVSE_GRID_DIMMING_CALC_H
++
++// Pure helpers for grid operator dimming (grid_dimming.h), kept free of
++// firmware dependencies so they are host-testable (test/test_grid_dimming).
++
++#include <stdint.h>
++
++#ifndef GRID_DIMMING_NOMINAL_VOLTAGE
++#define GRID_DIMMING_NOMINAL_VOLTAGE 230
++#endif
++
++// Current per phase that keeps the charger at or below `limit_w`:
++// floor(limit_w / (GRID_DIMMING_NOMINAL_VOLTAGE * phases)), never below
++// `min_amps` (the EVSE cannot signal less than its minimum current).
++// `phases` of 0 is treated as 1.
++uint32_t grid_dimming_limit_amps(uint32_t limit_w, uint8_t phases, uint32_t min_amps);
++
++// Parses a remote on/off request: "1"/"0", "on"/"off", "true"/"false"
++// (case-insensitive, surrounding whitespace ignored). Returns false and leaves
++// `active` untouched for anything else.
++bool grid_dimming_parse_state(const char *payload, bool &active);
++
++#endif // _OPENEVSE_GRID_DIMMING_CALC_H
+diff --git a/src/input.cpp b/src/input.cpp
+index 6071ebfa..a7bc3f5e 100644
+--- a/src/input.cpp
++++ b/src/input.cpp
+@@ -8,6 +8,10 @@
+ 
+ #include "emonesp.h"
+ #include "input.h"
++#ifdef ENABLE_SDM_METER
++#include "sdm_meter.h"
++#include "kinetos/kinetos_extras.h"
++#endif
+ #include "app_config.h"
+ #include "divert.h"
+ #include "event.h"
+@@ -112,6 +116,25 @@ void create_rapi_json(JsonDocument &doc)
+   }
+   doc["power"] = evse.getPower() * POWER_SCALE_FACTOR;
+   doc["pilot"] = evse.getChargeCurrent();
++#ifdef ENABLE_SDM_METER
++  if(sdmMeter.isValid()) {
++    doc["amp"] = sdmMeter.get(SdmMeter::CurrentL1) * AMPS_SCALE_FACTOR;
++    doc["voltage"] = sdmMeter.get(SdmMeter::VoltageL1) * VOLTS_SCALE_FACTOR;
++    doc["power"] = sdmMeter.get(SdmMeter::PowerTotal) * POWER_SCALE_FACTOR;
++    doc["amp2"] = sdmMeter.get(SdmMeter::CurrentL2) * AMPS_SCALE_FACTOR;
++    doc["amp3"] = sdmMeter.get(SdmMeter::CurrentL3) * AMPS_SCALE_FACTOR;
++    doc["voltage2"] = sdmMeter.get(SdmMeter::VoltageL2) * VOLTS_SCALE_FACTOR;
++    doc["voltage3"] = sdmMeter.get(SdmMeter::VoltageL3) * VOLTS_SCALE_FACTOR;
++    doc["phases"] = sdmMeter.activePhases();
++    doc["meter_import_kwh"] = sdmMeter.get(SdmMeter::ImportEnergy);
++  }
++  doc["meter_valid"] = sdmMeter.isValid();
++  doc["meter_present"] = sdmMeter.isPresent();
++  doc["meter_errors"] = sdmMeter.getErrors();
++#ifdef KINETOS_EXTRAS
++  kinetos_status(doc);
++#endif
++#endif
+   doc["max_current"] = evse.getMaxCurrent();
+   if(evse.isTemperatureValid(EVSE_MONITOR_TEMP_MONITOR)) {
+     doc["temp"] = evse.getTemperature(EVSE_MONITOR_TEMP_MONITOR) * TEMP_SCALE_FACTOR;
+diff --git a/src/kinetos/kinetos_crash.cpp b/src/kinetos/kinetos_crash.cpp
+new file mode 100644
+index 00000000..34cbd321
+--- /dev/null
++++ b/src/kinetos/kinetos_crash.cpp
+@@ -0,0 +1,66 @@
++// Crash trap: the Kinetos board has UART0 wired to the EVSE controller, so panic output is never
++// visible. The panic handler is wrapped (-Wl,--wrap=esp_panic_handler) to keep the exception
++// cause, reason and a backtrace in RTC memory, which survives the reboot. /status reports it as
++// "last_panic"; decode the addresses with xtensa-esp32-elf-addr2line against firmware.elf.
++#ifdef KINETOS_EXTRAS
++
++#include <Arduino.h>
++#include <string.h>
++#include <esp_attr.h>
++#include <esp_debug_helpers.h>
++#include <esp_private/panic_internal.h>
++#include <freertos/xtensa_context.h>
++#include "kinetos_crash.h"
++
++#define KINETOS_CRASH_MAGIC 0x4B434F52 // "KCOR"
++
++RTC_NOINIT_ATTR static KinetosCrash s_crash;
++
++extern "C" void __real_esp_panic_handler(panic_info_t *info);
++
++extern "C" void IRAM_ATTR __wrap_esp_panic_handler(panic_info_t *info)
++{
++  memset(&s_crash, 0, sizeof(s_crash));
++  s_crash.core = info->core;
++  s_crash.exception = info->exception;
++  if(info->reason) {
++    strncpy(s_crash.reason, info->reason, sizeof(s_crash.reason) - 1);
++  }
++  if(info->description) {
++    strncpy(s_crash.description, info->description, sizeof(s_crash.description) - 1);
++  }
++
++  const XtExcFrame *frame = (const XtExcFrame *)info->frame;
++  if(frame)
++  {
++    s_crash.pc = frame->pc;
++    s_crash.exccause = frame->exccause;
++    s_crash.excvaddr = frame->excvaddr;
++
++    esp_backtrace_frame_t bt = {
++      .pc = (uint32_t)frame->pc,
++      .sp = (uint32_t)frame->a1,
++      .next_pc = (uint32_t)frame->a0
++    };
++    s_crash.backtrace[0] = esp_cpu_process_stack_pc(bt.pc);
++    s_crash.depth = 1;
++    while(s_crash.depth < KINETOS_CRASH_DEPTH && bt.next_pc != 0 && esp_backtrace_get_next_frame(&bt)) {
++      s_crash.backtrace[s_crash.depth++] = esp_cpu_process_stack_pc(bt.pc);
++    }
++  }
++  s_crash.magic = KINETOS_CRASH_MAGIC;
++
++  __real_esp_panic_handler(info);
++}
++
++const KinetosCrash *kinetos_last_crash()
++{
++  return KINETOS_CRASH_MAGIC == s_crash.magic ? &s_crash : NULL;
++}
++
++void kinetos_clear_crash()
++{
++  s_crash.magic = 0;
++}
++
++#endif // KINETOS_EXTRAS
+diff --git a/src/kinetos/kinetos_crash.h b/src/kinetos/kinetos_crash.h
+new file mode 100644
+index 00000000..ad62e13a
+--- /dev/null
++++ b/src/kinetos/kinetos_crash.h
+@@ -0,0 +1,25 @@
++#ifndef KINETOS_CRASH_H
++#define KINETOS_CRASH_H
++
++#include <stdint.h>
++
++#define KINETOS_CRASH_DEPTH 16
++
++struct KinetosCrash {
++  uint32_t magic;
++  int core;
++  int exception;
++  uint32_t pc;
++  uint32_t exccause;
++  uint32_t excvaddr;
++  char reason[48];
++  char description[48];
++  uint32_t depth;
++  uint32_t backtrace[KINETOS_CRASH_DEPTH];
++};
++
++// Last panic recorded before the current boot, or NULL
++const KinetosCrash *kinetos_last_crash();
++void kinetos_clear_crash();
++
++#endif // KINETOS_CRASH_H
+diff --git a/src/kinetos/kinetos_extras.cpp b/src/kinetos/kinetos_extras.cpp
+new file mode 100644
+index 00000000..15634a45
+--- /dev/null
++++ b/src/kinetos/kinetos_extras.cpp
+@@ -0,0 +1,103 @@
++#ifdef KINETOS_EXTRAS
++
++#include <esp_system.h>
++
++#include "kinetos_extras.h"
++#include "kinetos_crash.h"
++#include "kinetos_led.h"
++#include "app_config.h"
++#include "grid_dimming.h"
++
++bool kinetos_led_pv_enabled;
++uint8_t kinetos_led_fx_charge;
++bool kinetos_ha_enabled;
++uint8_t kinetos_config_ver;
++uint8_t kinetos_legacy_p14a_pin;
++uint32_t kinetos_legacy_p14a_limit;
++
++#define KINETOS_CONFIG_VER 2
++
++// Kinetos V5 up to rev 8 kept its switches in flag bits 27-31. Upstream now uses all of them
++// (temperature throttle, LCD network info, $SYS probe, 12h clock, SNTP without DHCP).
++#define OLD_LED_PV    (1u << 27)
++#define OLD_SMART1    (1u << 28)
++#define OLD_P14A      (1u << 29)
++#define OLD_P14A_HIGH (1u << 30)
++#define OLD_HA        (1u << 31)
++#define OLD_MASK      (OLD_LED_PV | OLD_SMART1 | OLD_P14A | OLD_P14A_HIGH | OLD_HA)
++#define OLD_DEFAULT   (OLD_SMART1 | OLD_LED_PV | OLD_HA)
++
++bool kinetos_config_migrate(uint32_t &flags_changed, uint32_t default_flags)
++{
++  if(kinetos_config_ver >= KINETOS_CONFIG_VER) {
++    return false;
++  }
++
++  // Bits never set by the user still had the old default
++  uint32_t old = ((flags & flags_changed) | (OLD_DEFAULT & ~flags_changed)) & OLD_MASK;
++
++  kinetos_led_pv_enabled = old & OLD_LED_PV;
++  kinetos_ha_enabled = old & OLD_HA;
++  modbus_tcp_enabled = old & OLD_SMART1;
++  dimming_enabled = old & OLD_P14A;
++  dimming_input_active_high = old & OLD_P14A_HIGH;
++  dimming_input_pin = kinetos_legacy_p14a_pin < 40 ? kinetos_legacy_p14a_pin : GRID_DIMMING_PIN_NONE;
++  dimming_limit = kinetos_legacy_p14a_limit;
++
++  // Hand the bits back to upstream as "not changed, default value"
++  flags = (flags & ~OLD_MASK) | (default_flags & OLD_MASK);
++  flags_changed &= ~OLD_MASK;
++
++  kinetos_legacy_p14a_pin = 14;
++  kinetos_legacy_p14a_limit = 4200;
++  kinetos_config_ver = KINETOS_CONFIG_VER;
++  return true;
++}
++
++void kinetos_begin()
++{
++  // A panic record is only meaningful right after the panic reboot
++  if(ESP_RST_PANIC != esp_reset_reason()) {
++    kinetos_clear_crash();
++  }
++
++  // Free terminals IO14/IO15 and the button GPIO39, shown on the diagnostics page.
++  // Grid dimming sets its own pull-up/down later on the pin it uses.
++  pinMode(14, INPUT);
++  pinMode(15, INPUT);
++  pinMode(39, INPUT);
++}
++
++void kinetos_status(JsonDocument &doc)
++{
++  doc["dimming_active"] = gridDimming.isActive();
++  doc["dimming_limit_a"] = gridDimming.getLimitAmps();
++  doc["pv_share"] = kinetos_pv_share();
++  doc["gpio14"] = digitalRead(14);
++  doc["gpio15"] = digitalRead(15);
++  doc["gpio39"] = digitalRead(39);
++
++  const KinetosCrash *crash = kinetos_last_crash();
++  if(crash)
++  {
++    JsonObject p = doc.createNestedObject("last_panic");
++    char buf[16];
++    p["core"] = crash->core;
++    p["exception"] = crash->exception;
++    p["reason"] = crash->reason;
++    p["description"] = crash->description;
++    snprintf(buf, sizeof(buf), "0x%08x", crash->pc);
++    p["pc"] = String(buf);
++    p["exccause"] = crash->exccause;
++    snprintf(buf, sizeof(buf), "0x%08x", crash->excvaddr);
++    p["excvaddr"] = String(buf);
++    String bt;
++    for(uint32_t i = 0; i < crash->depth; i++) {
++      snprintf(buf, sizeof(buf), "0x%08x ", crash->backtrace[i]);
++      bt += buf;
++    }
++    p["backtrace"] = bt;
++  }
++}
++
++#endif // KINETOS_EXTRAS
+diff --git a/src/kinetos/kinetos_extras.h b/src/kinetos/kinetos_extras.h
+new file mode 100644
+index 00000000..2e44c16f
+--- /dev/null
++++ b/src/kinetos/kinetos_extras.h
+@@ -0,0 +1,39 @@
++// Kinetos OpenEVSE V5 extras on top of the upstream firmware and the Kinetos board support
++// (SDM meter, grid dimming, Modbus TCP): PV share on the LED ring, Home Assistant discovery,
++// panic trap and the migration of settings written by Kinetos V5 up to rev 8 (v5.1.5 based).
++#ifndef KINETOS_EXTRAS_H
++#define KINETOS_EXTRAS_H
++
++#ifdef KINETOS_EXTRAS
++
++#include <Arduino.h>
++#include <ArduinoJson.h>
++
++extern bool kinetos_led_pv_enabled;
++extern uint8_t kinetos_led_fx_charge;
++extern bool kinetos_ha_enabled;
++extern uint8_t kinetos_config_ver;
++extern uint8_t kinetos_legacy_p14a_pin;
++extern uint32_t kinetos_legacy_p14a_limit;
++
++// Entries for the opts[] table in app_config.cpp
++#define KINETOS_CONFIG_OPTS \
++  new ConfigOptDefinition<bool>(kinetos_led_pv_enabled, true, "led_pv_enabled", "lpv"), \
++  new ConfigOptDefinition<uint8_t>(kinetos_led_fx_charge, 3, "led_fx_charge", "lfx"), \
++  new ConfigOptDefinition<bool>(kinetos_ha_enabled, true, "ha_discovery_enabled", "had"), \
++  new ConfigOptDefinition<uint8_t>(kinetos_config_ver, 0, "kinetos_config_ver", "kcv"), \
++  new ConfigOptDefinition<uint8_t>(kinetos_legacy_p14a_pin, 14, "kinetos_legacy_p14a_pin", "p4p"), \
++  new ConfigOptDefinition<uint32_t>(kinetos_legacy_p14a_limit, 4200, "kinetos_legacy_p14a_limit", "p4l"),
++
++// Call after the user config is loaded, before the default flags are applied.
++// Returns true if settings were changed and need a commit.
++bool kinetos_config_migrate(uint32_t &flags_changed, uint32_t default_flags);
++
++// Start-up: panic record, diagnostic inputs
++void kinetos_begin();
++
++// Extra /status fields
++void kinetos_status(JsonDocument &doc);
++
++#endif // KINETOS_EXTRAS
++#endif // KINETOS_EXTRAS_H
+diff --git a/src/kinetos/kinetos_ha.cpp b/src/kinetos/kinetos_ha.cpp
+new file mode 100644
+index 00000000..86c20ada
+--- /dev/null
++++ b/src/kinetos/kinetos_ha.cpp
+@@ -0,0 +1,171 @@
++#ifdef KINETOS_EXTRAS
++
++#include <ArduinoJson.h>
++#include <espal.h>
++
++#include "kinetos_ha.h"
++#include "kinetos_extras.h"
++#include "app_config.h"
++#include "emonesp.h"
++
++namespace {
++
++struct HaEntity {
++  const char *component;   // sensor, binary_sensor, switch, number, button
++  const char *key;         // status key = state topic suffix
++  const char *name;
++  const char *deviceClass;
++  const char *unit;
++  const char *stateClass;
++  const char *valueTemplate;
++};
++
++// Status keys published by OpenEVSE (+ Kinetos additions). amp/voltage/power are A/V/W in v5,
++// temperatures are x10, session_energy is Wh, total_energy kWh.
++const HaEntity entities[] = {
++  { "sensor", "power",          "Ladeleistung",        "power",       "W",   "measurement",      NULL },
++  { "sensor", "amp",            "Strom L1",            "current",     "A",   "measurement",      NULL },
++  { "sensor", "amp2",           "Strom L2",            "current",     "A",   "measurement",      NULL },
++  { "sensor", "amp3",           "Strom L3",            "current",     "A",   "measurement",      NULL },
++  { "sensor", "voltage",        "Spannung L1",         "voltage",     "V",   "measurement",      NULL },
++  { "sensor", "voltage2",       "Spannung L2",         "voltage",     "V",   "measurement",      NULL },
++  { "sensor", "voltage3",       "Spannung L3",         "voltage",     "V",   "measurement",      NULL },
++  { "sensor", "phases",         "Aktive Phasen",       NULL,          NULL,  "measurement",      NULL },
++  { "sensor", "session_energy", "Energie Ladevorgang", "energy",      "Wh",  "total",            NULL },
++  { "sensor", "total_energy",   "Energie gesamt",      "energy",      "kWh", "total_increasing", NULL },
++  { "sensor", "meter_import_kwh", "MID-Zählerstand",     "energy",      "kWh", "total_increasing", NULL },
++  { "sensor", "pilot",          "Ladestrom-Vorgabe",   "current",     "A",   "measurement",      NULL },
++  { "sensor", "temp",           "Temperatur",          "temperature", "°C",  "measurement",      "{{ value | float / 10 }}" },
++  { "sensor", "elapsed",        "Ladedauer",           "duration",    "s",   "measurement",      NULL },
++  { "sensor", "battery_level",  "Fahrzeug-SoC",        "battery",     "%",   "measurement",      NULL },
++  { "sensor", "battery_range",  "Fahrzeug-Reichweite", "distance",    "km",  "measurement",      NULL },
++  { "sensor", "state",          "Zustand",             NULL,          NULL,  NULL,
++    "{% set s = value | int %}{{ {1:'Bereit',2:'Fahrzeug verbunden',3:'Lädt',4:'Lüftung nötig',"
++    "5:'Diodenfehler',6:'FI-Fehler',7:'Kein Schutzleiter',8:'Relais klebt',9:'FI-Selbsttest',"
++    "10:'Übertemperatur',11:'Überstrom',254:'Pausiert',255:'Deaktiviert'}.get(s, 'Unbekannt') }}" },
++  { "binary_sensor", "vehicle",   "Fahrzeug verbunden", "plug",        NULL,  NULL, "{{ 'ON' if value | int == 1 else 'OFF' }}" },
++  { "binary_sensor", "dimming_active","§14a Dimmung",      "running",     NULL,  NULL, "{{ 'ON' if value in ['true','1'] else 'OFF' }}" },
++};
++
++void addDevice(JsonDocument &doc, const String &id)
++{
++  JsonObject dev = doc.createNestedObject("dev");
++  dev.createNestedArray("ids").add("kinetos_" + id);
++  dev["name"] = esp_hostname;
++  dev["mf"] = "Kinetos / Bond Electronics";
++  dev["mdl"] = "Kinetos OpenEVSE V5";
++  dev["sw"] = currentfirmware;
++  dev["cu"] = "http://" + esp_hostname + ".local/";
++}
++
++String discoveryTopic(const char *component, const String &id, const char *key)
++{
++  return String("homeassistant/") + component + "/kinetos_" + id + "/" + key + "/config";
++}
++
++// Entity ids from Kinetos V5 rev <= 8, kept so Home Assistant keeps its entities and history
++const char *entityId(const char *key)
++{
++  if(0 == strcmp(key, "meter_import_kwh")) return "mid_import_kwh";
++  if(0 == strcmp(key, "dimming_active")) return "p14a_active";
++  return key;
++}
++
++} // namespace
++
++void kinetos_ha_discovery(KinetosHaPublish publish)
++{
++  if(!kinetos_ha_enabled) {
++    return;
++  }
++
++  String id = ESPAL.getLongId();
++  String base = mqtt_topic;
++  String payload;
++
++  for(const HaEntity &e : entities)
++  {
++    DynamicJsonDocument doc(1024);
++    doc["name"] = e.name;
++    doc["uniq_id"] = "kinetos_" + id + "_" + entityId(e.key);
++    doc["stat_t"] = base + "/" + e.key;
++    if(e.deviceClass) doc["dev_cla"] = e.deviceClass;
++    if(e.unit) doc["unit_of_meas"] = e.unit;
++    if(e.stateClass) doc["stat_cla"] = e.stateClass;
++    if(e.valueTemplate) doc["val_tpl"] = e.valueTemplate;
++    addDevice(doc, id);
++    payload = "";
++    serializeJson(doc, payload);
++    publish(discoveryTopic(e.component, id, entityId(e.key)), payload, true);
++  }
++
++  // Charging allowed: manual override active/disabled, state from the numeric EVSE state
++  {
++    DynamicJsonDocument doc(1024);
++    doc["name"] = "Laden erlaubt";
++    doc["uniq_id"] = "kinetos_" + id + "_charge_enable";
++    doc["stat_t"] = base + "/state";
++    doc["val_tpl"] = "{{ 'OFF' if value | int >= 254 else 'ON' }}";
++    doc["cmd_t"] = base + "/override/set";
++    doc["pl_on"] = "{\"state\":\"active\"}";
++    doc["pl_off"] = "{\"state\":\"disabled\"}";
++    doc["icon"] = "mdi:ev-station";
++    addDevice(doc, id);
++    payload = "";
++    serializeJson(doc, payload);
++    publish(discoveryTopic("switch", id, "charge_enable"), payload, true);
++  }
++
++  // Charge current via manual override
++  {
++    DynamicJsonDocument doc(1024);
++    doc["name"] = "Ladestrom";
++    doc["uniq_id"] = "kinetos_" + id + "_charge_current";
++    doc["stat_t"] = base + "/pilot";
++    doc["cmd_t"] = base + "/override/set";
++    doc["cmd_tpl"] = "{\"charge_current\": {{ value | int }} }";
++    doc["min"] = 6;
++    doc["max"] = 32;
++    doc["step"] = 1;
++    doc["unit_of_meas"] = "A";
++    doc["dev_cla"] = "current";
++    doc["mode"] = "slider";
++    addDevice(doc, id);
++    payload = "";
++    serializeJson(doc, payload);
++    publish(discoveryTopic("number", id, "charge_current"), payload, true);
++  }
++
++  // Hand control back (clear manual override)
++  {
++    DynamicJsonDocument doc(1024);
++    doc["name"] = "Übersteuerung aufheben";
++    doc["uniq_id"] = "kinetos_" + id + "_override_clear";
++    doc["cmd_t"] = base + "/override/set";
++    doc["pl_prs"] = "clear";
++    doc["icon"] = "mdi:restore";
++    addDevice(doc, id);
++    payload = "";
++    serializeJson(doc, payload);
++    publish(discoveryTopic("button", id, "override_clear"), payload, true);
++  }
++
++  // §14a remote dimming (for EMS / control box via MQTT)
++  {
++    DynamicJsonDocument doc(1024);
++    doc["name"] = "§14a Dimmung (Fernsteuerung)";
++    doc["uniq_id"] = "kinetos_" + id + "_p14a_remote";
++    doc["stat_t"] = base + "/dimming_active";
++    doc["val_tpl"] = "{{ 'ON' if value in ['true','1'] else 'OFF' }}";
++    doc["cmd_t"] = base + "/dimming/set";
++    doc["pl_on"] = "1";
++    doc["pl_off"] = "0";
++    doc["icon"] = "mdi:transmission-tower-export";
++    addDevice(doc, id);
++    payload = "";
++    serializeJson(doc, payload);
++    publish(discoveryTopic("switch", id, "p14a_remote"), payload, true);
++  }
++}
++
++#endif // KINETOS_EXTRAS
+diff --git a/src/kinetos/kinetos_ha.h b/src/kinetos/kinetos_ha.h
+new file mode 100644
+index 00000000..61b384d7
+--- /dev/null
++++ b/src/kinetos/kinetos_ha.h
+@@ -0,0 +1,15 @@
++// Home Assistant MQTT discovery for the Kinetos wallbox (published retained on every MQTT connect).
++// Entities read the per-key status topics OpenEVSE already publishes (<mqtt_topic>/<key>) and
++// control through the existing <mqtt_topic>/override/set and <mqtt_topic>/dimming/set topics.
++#ifndef KINETOS_HA_H
++#define KINETOS_HA_H
++
++#include <Arduino.h>
++#include <functional>
++
++// publish(topic, payload, retain)
++typedef std::function<void(const String &, const String &, bool)> KinetosHaPublish;
++
++void kinetos_ha_discovery(KinetosHaPublish publish);
++
++#endif // KINETOS_HA_H
+diff --git a/src/kinetos/kinetos_led.cpp b/src/kinetos/kinetos_led.cpp
+new file mode 100644
+index 00000000..a53c6a08
+--- /dev/null
++++ b/src/kinetos/kinetos_led.cpp
+@@ -0,0 +1,67 @@
++#ifdef KINETOS_EXTRAS
++
++#include "kinetos_led.h"
++#include "kinetos_extras.h"
++#include "app_config.h"
++#include "divert.h"
++#include "evse_man.h"
++
++extern EvseManager evse;
++
++#define PV_COLOUR   0x00FF20
++#define GRID_COLOUR 0xFF6000
++#define FEED_MAX_AGE (5UL * 60UL * 1000UL)
++
++static uint32_t s_feedSeen = 0;
++
++void kinetos_pv_feed_seen()
++{
++  s_feedSeen = millis();
++  if(0 == s_feedSeen) s_feedSeen = 1;
++}
++
++float kinetos_pv_share()
++{
++  double power = evse.getPower();
++  if(power < 100 || 0 == s_feedSeen || millis() - s_feedSeen > FEED_MAX_AGE) {
++    return -1;
++  }
++  double pv;
++  if(mqtt_grid_ie != "") {
++    // grid_ie: import positive, export negative -> what is not imported comes from PV
++    int grid = divert.getGridIe();
++    pv = power - (grid > 0 ? grid : 0);
++  } else if(mqtt_solar != "") {
++    pv = divert.getSolar();
++  } else {
++    return -1;
++  }
++  float share = pv / power;
++  return share < 0 ? 0 : (share > 1 ? 1 : share);
++}
++
++static uint32_t blend(uint32_t a, uint32_t b, float t)
++{
++  uint8_t r = ((a >> 16) & 0xFF) + (((int)((b >> 16) & 0xFF) - (int)((a >> 16) & 0xFF)) * t);
++  uint8_t g = ((a >> 8) & 0xFF) + (((int)((b >> 8) & 0xFF) - (int)((a >> 8) & 0xFF)) * t);
++  uint8_t bl = (a & 0xFF) + (((int)(b & 0xFF) - (int)(a & 0xFF)) * t);
++  return ((uint32_t)r << 16) | ((uint32_t)g << 8) | bl;
++}
++
++bool kinetos_led_charging(uint32_t &colour, uint8_t &mode, uint16_t &speed)
++{
++  if(!kinetos_led_pv_enabled) {
++    return false;
++  }
++  float share = kinetos_pv_share();
++  if(share >= 0) {
++    colour = blend(GRID_COLOUR, PV_COLOUR, share);
++  }
++  mode = kinetos_led_fx_charge;
++  // More power -> faster animation (WS2812FX: lower value = faster)
++  double power = evse.getPower();
++  speed = power > 11000 ? 400 : (uint16_t)(2000 - power / 11000.0 * 1600);
++  return true;
++}
++
++#endif // KINETOS_EXTRAS
+diff --git a/src/kinetos/kinetos_led.h b/src/kinetos/kinetos_led.h
+new file mode 100644
+index 00000000..db0b1faf
+--- /dev/null
++++ b/src/kinetos/kinetos_led.h
+@@ -0,0 +1,18 @@
++// LED ring while charging: colour shows the solar share of the charging power (orange = grid,
++// green = PV), animation is any WS2812FX mode (config "led_fx_charge", e.g. 3 colour wipe,
++// 12 rainbow cycle, 18 running lights, 43 larson scanner, 44 comet).
++#ifndef KINETOS_LED_H
++#define KINETOS_LED_H
++
++#include <Arduino.h>
++
++// Called when an MQTT grid/solar value arrives (the feed only counts if it is alive)
++void kinetos_pv_feed_seen();
++
++// Solar share of the current charging power (0..1), or -1 if no live PV/grid feed
++float kinetos_pv_share();
++
++// Colour/mode/speed for the charging state. Returns false to keep the upstream behaviour.
++bool kinetos_led_charging(uint32_t &colour, uint8_t &mode, uint16_t &speed);
++
++#endif // KINETOS_LED_H
+diff --git a/src/lcd_lvgl.cpp b/src/lcd_lvgl.cpp
+index 3308954d..4a014fda 100644
+--- a/src/lcd_lvgl.cpp
++++ b/src/lcd_lvgl.cpp
+@@ -253,6 +253,7 @@ static const char *pilot_source_name(EvseClient client)
+     case EvseClient_OpenEVSE_MQTT:                 return "mqtt";
+     case EvseClient_OpenEVSE_Shaper:               return "grid limit";
+     case EvseClient_OpenEVSE_TempThrottle:         return "temp limit";
++    case EvseClient_OpenEVSE_GridDimming:          return "grid dimming";
+     case EvseClient_OpenEnergyMonitor_DemandShaper:return "demand shaper";
+     default:                                       return "claim";
+   }
+diff --git a/src/main.cpp b/src/main.cpp
+index 5f007bf5..8f6e64a2 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -52,6 +52,9 @@
+ #include "rfid.h"
+ #include "current_shaper.h"
+ #include "temp_throttle.h"
++#include "grid_dimming.h"
++#include "kinetos/kinetos_extras.h"
++#include "modbus_tcp.h"
+ #include "limit.h"
+ #include "diagnostics.h"
+ #include "boost.h"
+@@ -75,6 +78,9 @@
+ #endif
+ 
+ #include "certificates.h"
++#ifdef ENABLE_SDM_METER
++#include "sdm_meter.h"
++#endif
+ 
+ EventLog eventLog;
+ CertificateStore certs;
+@@ -272,11 +278,24 @@ void setup()
+   DBUGF("After ocpp.begin: %d", ESPAL.getFreeHeap());
+ 
+   shaper.begin(evse);
++
++#ifdef ENABLE_SDM_METER
++  sdmMeter.begin();
++#endif
+   DBUGF("After shaper.begin: %d", ESPAL.getFreeHeap());
+ 
+   tempThrottle.begin(evse);
+   DBUGF("After tempThrottle.begin: %d", ESPAL.getFreeHeap());
+ 
++#ifdef KINETOS_EXTRAS
++  kinetos_begin();
++#endif
++  gridDimming.begin(evse);
++  DBUGF("After gridDimming.begin: %d", ESPAL.getFreeHeap());
++
++  modbusTcp.begin(evse);
++  DBUGF("After modbusTcp.begin: %d", ESPAL.getFreeHeap());
++
+   lcd.display(F("OpenEVSE WiFI"), 0, 0, 0, LCD_CLEAR_LINE);
+   lcd.display(currentfirmware, 0, 1, 5 * 1000, LCD_CLEAR_LINE);
+ 
+@@ -332,7 +351,9 @@ void loop()
+   if(net.isConnected())
+   {
+     if (vehicle_data_src == VEHICLE_DATA_SRC_TESLA) {
++#ifndef KINETOS_EXTRAS // TeslaMate via MQTT instead of the Tesla cloud
+       teslaClient.loop();
++#endif
+     }
+ 
+     if(emoncms_updated)
+diff --git a/src/modbus_tcp.cpp b/src/modbus_tcp.cpp
+new file mode 100644
+index 00000000..64482fd1
+--- /dev/null
++++ b/src/modbus_tcp.cpp
+@@ -0,0 +1,324 @@
++#if defined(ENABLE_DEBUG) && !defined(ENABLE_DEBUG_MODBUS_TCP)
++#undef ENABLE_DEBUG
++#endif
++
++#include <time.h>
++#include <openevse.h>
++
++#include "modbus_tcp.h"
++#include "app_config.h"
++#include "rfid.h"
++#include "debug.h"
++
++// modbus_tcp_protocol.cpp mirrors these values
++static_assert(OPENEVSE_STATE_STARTING == 0 && OPENEVSE_STATE_NOT_CONNECTED == 1 &&
++              OPENEVSE_STATE_CONNECTED == 2 && OPENEVSE_STATE_CHARGING == 3 &&
++              OPENEVSE_STATE_VENT_REQUIRED == 4 && OPENEVSE_STATE_DIODE_CHECK_FAILED == 5 &&
++              OPENEVSE_STATE_GFI_FAULT == 6 && OPENEVSE_STATE_SLEEPING == 254,
++              "modbus_tcp_protocol.cpp state values out of sync with openevse.h");
++
++ModbusTcpServer modbusTcp;
++
++ModbusTcpServer::ModbusTcpServer() :
++  MicroTasks::Task(),
++  _evse(NULL),
++  _listener(NULL),
++  _port(0),
++  _clients(0),
++  _last_state(OPENEVSE_STATE_STARTING),
++  _session(false),
++  _start_time(0),
++  _stop_time(0),
++  _power(),
++  _current(),
++  _props(EvseState::None),
++  _data()
++{
++}
++
++void ModbusTcpServer::begin(EvseManager &evse)
++{
++  _evse = &evse;
++  MicroTask.startTask(this);
++}
++
++void ModbusTcpServer::notifyConfigChanged()
++{
++  MicroTask.wakeTask(this);
++}
++
++void ModbusTcpServer::setup()
++{
++}
++
++unsigned long ModbusTcpServer::loop(MicroTasks::WakeReason reason)
++{
++  if(modbus_tcp_enabled)
++  {
++    if(NULL != _listener && _port != modbus_tcp_port) {
++      stopListener();
++    }
++    if(NULL == _listener) {
++      startListener();
++    }
++  }
++  else if(NULL != _listener)
++  {
++    stopListener();
++    releaseControl();
++  }
++
++  trackSession();
++
++  // Watchdog: no fresh setpoint within the timeout pauses charging
++  if(_evse->isCharging() && (watchdogExpired(_power) || watchdogExpired(_current)))
++  {
++    DBUGLN("ModbusTcp: watchdog expired, pausing");
++    _power.watchdog = false;
++    _current.watchdog = false;
++    pause();
++  }
++
++  return MODBUS_TCP_LOOP_TIME;
++}
++
++bool ModbusTcpServer::startListener()
++{
++  char address[8];
++  snprintf(address, sizeof(address), "%u", (unsigned int)(modbus_tcp_port & 0xFFFF));
++  _listener = mg_bind(Mongoose.getMgr(), address, handler, this);
++  _port = modbus_tcp_port;
++  DBUGF("ModbusTcp: listener on port %s %s", address, _listener ? "started" : "failed");
++  return NULL != _listener;
++}
++
++void ModbusTcpServer::stopListener()
++{
++  // Close the listener and every client accepted from it
++  mg_mgr *mgr = Mongoose.getMgr();
++  for(struct mg_connection *c = mg_next(mgr, NULL); NULL != c; c = mg_next(mgr, c))
++  {
++    if(c == _listener || (NULL != _listener && c->listener == _listener)) {
++      c->flags |= MG_F_CLOSE_IMMEDIATELY;
++    }
++  }
++  _listener = NULL;
++  DBUGLN("ModbusTcp: listener stopped");
++}
++
++void ModbusTcpServer::handler(struct mg_connection *nc, int ev, void *p, void *u)
++{
++  ModbusTcpServer *self = (ModbusTcpServer *)u;
++  switch(ev)
++  {
++    case MG_EV_ACCEPT:
++      if(++self->_clients > MODBUS_TCP_MAX_CLIENTS) {
++        DBUGLN("ModbusTcp: too many clients");
++        nc->flags |= MG_F_CLOSE_IMMEDIATELY;
++      }
++      break;
++
++    case MG_EV_RECV:
++      self->onReceive(nc);
++      break;
++
++    case MG_EV_POLL:
++      if(NULL != nc->listener && mg_time() - nc->last_io_time > MODBUS_TCP_IDLE_TIMEOUT) {
++        nc->flags |= MG_F_CLOSE_IMMEDIATELY;
++      }
++      break;
++
++    case MG_EV_CLOSE:
++      if(NULL != nc->listener && self->_clients > 0) {
++        self->_clients--;
++      }
++      break;
++  }
++}
++
++void ModbusTcpServer::onReceive(struct mg_connection *nc)
++{
++  struct mbuf *io = &nc->recv_mbuf;
++  uint8_t resp[MODBUS_TCP_MAX_FRAME];
++
++  while(io->len > 0)
++  {
++    size_t resp_len = 0;
++    refreshData();
++    int used = modbus_tcp_process((const uint8_t *)io->buf, io->len, MODBUS_TCP_UNIT_ID, *this, resp, resp_len);
++    if(0 == used) {
++      break;
++    }
++    if(used < 0) {
++      DBUGLN("ModbusTcp: malformed frame, closing");
++      nc->flags |= MG_F_CLOSE_IMMEDIATELY;
++      break;
++    }
++    mg_send(nc, resp, resp_len);
++    mbuf_remove(io, used);
++  }
++}
++
++uint32_t ModbusTcpServer::timeOfDay()
++{
++  time_t t = time(NULL);
++  if(t < 1000000000) { // clock not set yet
++    return 0;
++  }
++  struct tm lt;
++  localtime_r(&t, &lt);
++  return lt.tm_hour * 10000 + lt.tm_min * 100 + lt.tm_sec;
++}
++
++void ModbusTcpServer::trackSession()
++{
++  uint8_t state = _evse->getEvseState();
++  if(state == _last_state) {
++    return;
++  }
++  if(OPENEVSE_STATE_CHARGING == state && !_session) {
++    _session = true;
++    _start_time = timeOfDay();
++    _stop_time = 0;
++  } else if(OPENEVSE_STATE_CONNECTED == state && _session) {
++    _stop_time = timeOfDay();
++  } else if(OPENEVSE_STATE_NOT_CONNECTED == state) {
++    _session = false;
++    _power.watchdog = false;
++    _current.watchdog = false;
++  }
++  _last_state = state;
++}
++
++void ModbusTcpServer::refreshData()
++{
++  _data.evse_state = _evse->getEvseState();
++  _data.fault = _evse->isError();
++  _data.session = _session;
++  _data.waiting_for_auth = config_rfid_enabled() && rfid.getAuthenticatedTag().isEmpty();
++  _data.max_hardware_current = _evse->getMaxHardwareCurrent();
++  _data.max_configured_current = _evse->getMaxConfiguredCurrent();
++  _data.charge_current = _evse->getChargeCurrent();
++  _data.min_current = _evse->getMinCurrent();
++  _data.power = (uint32_t)_evse->getPower();
++  // No per-phase measurement source yet, registers 1102..1107 read 0
++  _data.power_l1 = 0;
++  _data.power_l2 = 0;
++  _data.power_l3 = 0;
++  _data.total_energy = (uint32_t)_evse->getTotalEnergy();
++  _data.session_energy = (uint32_t)_evse->getSessionEnergy();
++  _data.session_elapsed = _evse->getSessionElapsed();
++  _data.start_time = _start_time;
++  _data.stop_time = _stop_time;
++  _data.power_control = _power.regs;
++  _data.current_control = _current.regs;
++}
++
++bool ModbusTcpServer::readRegister(uint16_t addr, uint16_t &value)
++{
++  return modbus_smart1_read(addr, _data, value);
++}
++
++uint8_t ModbusTcpServer::writeRegisters(uint16_t start, uint16_t count, const uint16_t *values)
++{
++  Control *c = NULL;
++  uint16_t base = 0;
++  uint32_t end = (uint32_t)start + count;
++  if(start >= MODBUS_SMART1_POWER_CONTROL && end <= MODBUS_SMART1_POWER_CONTROL + MODBUS_SMART1_CONTROL_SIZE) {
++    c = &_power;
++    base = MODBUS_SMART1_POWER_CONTROL;
++  } else if(start >= MODBUS_SMART1_CURRENT_CONTROL && end <= MODBUS_SMART1_CURRENT_CONTROL + MODBUS_SMART1_CONTROL_SIZE) {
++    c = &_current;
++    base = MODBUS_SMART1_CURRENT_CONTROL;
++  } else {
++    return MODBUS_EX_ILLEGAL_ADDRESS;
++  }
++
++  for(uint16_t i = 0; i < count; i++)
++  {
++    switch(start - base + i)
++    {
++      case 0: c->regs.setpoint = values[i]; break;
++      case 1: c->regs.pause = values[i]; break;
++      case 2: c->regs.start_stop = values[i]; break;
++      case 3: c->regs.timeout = values[i]; break;
++    }
++  }
++
++  // Apply once per request, so a block written with FC 16 acts as one command
++  applyControl(*c, c == &_power);
++  return 0;
++}
++
++void ModbusTcpServer::applyControl(Control &c, bool is_power)
++{
++  if(0 == c.regs.timeout) {
++    c.watchdog = false;
++  }
++
++  if(0 != c.regs.setpoint)
++  {
++    uint32_t amps = is_power ?
++      modbus_smart1_power_to_amps(c.regs.setpoint, _evse->getVoltage(), config_threephase_enabled() ? 3 : 1) :
++      modbus_smart1_current_to_amps(c.regs.setpoint);
++    DBUGF("ModbusTcp: %s setpoint %u -> %uA", is_power ? "power" : "current", c.regs.setpoint, amps);
++    if(amps > 0)
++    {
++      _props.setChargeCurrent(amps);
++      claim();
++      if(c.regs.timeout) {
++        c.watchdog = true;
++        c.deadline = millis() + c.regs.timeout * 1000UL;
++      }
++    }
++  }
++
++  if(1 == c.regs.pause && _evse->isCharging()) {
++    pause();
++  }
++
++  if(1 == c.regs.start_stop) {
++    enable();
++  } else if(2 == c.regs.start_stop) {
++    pause();
++  } else if(0 == _power.regs.setpoint && 0 == _power.regs.pause && 0 == _power.regs.start_stop &&
++            0 == _current.regs.setpoint && 0 == _current.regs.pause && 0 == _current.regs.start_stop)
++  {
++    // Extension: all control registers 0 hands control back
++    releaseControl();
++  }
++}
++
++bool ModbusTcpServer::watchdogExpired(Control &c)
++{
++  return c.watchdog && (long)(millis() - c.deadline) >= 0;
++}
++
++void ModbusTcpServer::claim()
++{
++  _evse->claim(EvseClient_OpenEVSE_ModbusTcp, EvseManager_Priority_API, _props);
++}
++
++void ModbusTcpServer::pause()
++{
++  _props.setState(EvseState::Disabled);
++  claim();
++}
++
++void ModbusTcpServer::enable()
++{
++  _props.setState(EvseState::Active);
++  claim();
++}
++
++void ModbusTcpServer::releaseControl()
++{
++  if(_evse->clientHasClaim(EvseClient_OpenEVSE_ModbusTcp)) {
++    DBUGLN("ModbusTcp: releasing claim");
++    _evse->release(EvseClient_OpenEVSE_ModbusTcp);
++  }
++  EvseProperties none(EvseState::None);
++  _props = none;
++  _power = Control();
++  _current = Control();
++}
+diff --git a/src/modbus_tcp.h b/src/modbus_tcp.h
+new file mode 100644
+index 00000000..df2da747
+--- /dev/null
++++ b/src/modbus_tcp.h
+@@ -0,0 +1,91 @@
++#ifndef _OPENEVSE_MODBUS_TCP_H
++#define _OPENEVSE_MODBUS_TCP_H
++
++// Modbus TCP server for energy management systems. The register map follows
++// the smart1 EMS layout used by Kinetos wallboxes (see docs/user/modbus-tcp.md).
++// Control writes go through an EvseManager claim (EvseClient_OpenEVSE_ModbusTcp,
++// API priority), so they coexist with the other clients.
++//
++// There is no authentication: the server is off by default (modbus_tcp_enabled).
++
++#ifndef MODBUS_TCP_LOOP_TIME
++#define MODBUS_TCP_LOOP_TIME 500
++#endif
++
++#ifndef MODBUS_TCP_UNIT_ID
++#define MODBUS_TCP_UNIT_ID 1
++#endif
++
++#ifndef MODBUS_TCP_MAX_CLIENTS
++#define MODBUS_TCP_MAX_CLIENTS 4
++#endif
++
++// Close client connections without traffic for this long (s)
++#ifndef MODBUS_TCP_IDLE_TIMEOUT
++#define MODBUS_TCP_IDLE_TIMEOUT 300
++#endif
++
++#include <Arduino.h>
++#include <MicroTasks.h>
++#include <MongooseCore.h>
++
++#include "evse_man.h"
++#include "modbus_tcp_protocol.h"
++
++class ModbusTcpServer : public MicroTasks::Task, public ModbusRegisterHandler
++{
++  private:
++    struct Control {
++      ModbusSmart1Control regs;
++      bool watchdog;
++      uint32_t deadline;   // millis()
++    };
++
++    EvseManager *_evse;
++    struct mg_connection *_listener;
++    uint32_t _port;
++    uint8_t _clients;
++    uint8_t _last_state;
++    bool _session;
++    uint32_t _start_time;
++    uint32_t _stop_time;
++    Control _power;
++    Control _current;
++    EvseProperties _props;
++    ModbusSmart1Data _data;
++
++    static void handler(struct mg_connection *nc, int ev, void *p, void *u);
++    void onReceive(struct mg_connection *nc);
++    bool startListener();
++    void stopListener();
++    void refreshData();
++    void trackSession();
++    void applyControl(Control &c, bool is_power);
++    bool watchdogExpired(Control &c);
++    void claim();
++    void pause();
++    void enable();
++    void releaseControl();
++    static uint32_t timeOfDay();
++
++  protected:
++    void setup();
++    unsigned long loop(MicroTasks::WakeReason reason);
++
++  public:
++    ModbusTcpServer();
++    void begin(EvseManager &evse);
++    void notifyConfigChanged();
++
++    bool isListening() {
++      return NULL != _listener;
++    }
++
++    // ModbusRegisterHandler
++    bool readRegister(uint16_t addr, uint16_t &value);
++    uint8_t writeRegisters(uint16_t start, uint16_t count, const uint16_t *values);
++};
++
++extern ModbusTcpServer modbusTcp;
++
++#endif // _OPENEVSE_MODBUS_TCP_H
+diff --git a/src/modbus_tcp_protocol.cpp b/src/modbus_tcp_protocol.cpp
+new file mode 100644
+index 00000000..73aa4c07
+--- /dev/null
++++ b/src/modbus_tcp_protocol.cpp
+@@ -0,0 +1,225 @@
++#include <string.h>
++
++#include "modbus_tcp_protocol.h"
++
++// Mirror of the OPENEVSE_STATE_* values used below (openevse.h is not
++// available to host tests); modbus_tcp.cpp static_asserts that they match.
++#define STATE_STARTING            0
++#define STATE_NOT_CONNECTED       1
++#define STATE_CONNECTED           2
++#define STATE_CHARGING            3
++#define STATE_VENT_REQUIRED       4
++#define STATE_DIODE_CHECK_FAILED  5
++#define STATE_GFI_FAULT           6
++#define STATE_SLEEPING            254
++
++static inline uint16_t get_u16(const uint8_t *p)
++{
++  return (uint16_t)((p[0] << 8) | p[1]);
++}
++
++static inline void put_u16(uint8_t *p, uint16_t v)
++{
++  p[0] = v >> 8;
++  p[1] = v & 0xFF;
++}
++
++int modbus_tcp_process(const uint8_t *buf, size_t len, uint8_t unit_id,
++                       ModbusRegisterHandler &handler, uint8_t *resp, size_t &resp_len)
++{
++  resp_len = 0;
++  if(len < MODBUS_TCP_MBAP_SIZE + 1) {
++    return 0;
++  }
++
++  uint16_t protocol = get_u16(buf + 2);
++  uint16_t length = get_u16(buf + 4); // unit + PDU
++  if(0 != protocol || length < 2 || length > MODBUS_TCP_MAX_FRAME - 6) {
++    return -1;
++  }
++  size_t frame = 6 + length;
++  if(len < frame) {
++    return 0;
++  }
++
++  uint8_t unit = buf[6];
++  uint8_t fc = buf[7];
++  const uint8_t *pdu = buf + 8;
++  size_t pdu_len = length - 2; // data after the function code
++  uint8_t exception = 0;
++  size_t n = 8;
++
++  if(unit != unit_id && unit != 0 && unit != 0xFF)
++  {
++    exception = MODBUS_EX_GATEWAY_TARGET_FAILED;
++  }
++  else if(MODBUS_FC_READ_HOLDING == fc || MODBUS_FC_READ_INPUT == fc)
++  {
++    uint16_t start = pdu_len >= 4 ? get_u16(pdu) : 0;
++    uint16_t count = pdu_len >= 4 ? get_u16(pdu + 2) : 0;
++    if(count < 1 || count > MODBUS_TCP_MAX_READ) {
++      exception = MODBUS_EX_ILLEGAL_VALUE;
++    } else {
++      resp[n++] = count * 2;
++      for(uint16_t i = 0; i < count; i++)
++      {
++        uint16_t value;
++        if(!handler.readRegister(start + i, value)) {
++          exception = MODBUS_EX_ILLEGAL_ADDRESS;
++          break;
++        }
++        put_u16(resp + n, value);
++        n += 2;
++      }
++    }
++  }
++  else if(MODBUS_FC_WRITE_SINGLE == fc)
++  {
++    if(pdu_len < 4) {
++      exception = MODBUS_EX_ILLEGAL_VALUE;
++    } else {
++      uint16_t value = get_u16(pdu + 2);
++      exception = handler.writeRegisters(get_u16(pdu), 1, &value);
++      if(!exception) {
++        memcpy(resp + n, pdu, 4); // echo address and value
++        n += 4;
++      }
++    }
++  }
++  else if(MODBUS_FC_WRITE_MULTIPLE == fc)
++  {
++    uint16_t count = pdu_len >= 5 ? get_u16(pdu + 2) : 0;
++    uint8_t bytes = pdu_len >= 5 ? pdu[4] : 0;
++    if(count < 1 || count > MODBUS_TCP_MAX_WRITE || bytes != count * 2 || pdu_len < 5u + bytes) {
++      exception = MODBUS_EX_ILLEGAL_VALUE;
++    } else {
++      uint16_t values[MODBUS_TCP_MAX_WRITE];
++      for(uint16_t i = 0; i < count; i++) {
++        values[i] = get_u16(pdu + 5 + i * 2);
++      }
++      exception = handler.writeRegisters(get_u16(pdu), count, values);
++      if(!exception) {
++        memcpy(resp + n, pdu, 4); // echo start address and count
++        n += 4;
++      }
++    }
++  }
++  else
++  {
++    exception = MODBUS_EX_ILLEGAL_FUNCTION;
++  }
++
++  memcpy(resp, buf, 4); // transaction and protocol id
++  resp[6] = unit;
++  if(exception) {
++    resp[7] = fc | 0x80;
++    resp[8] = exception;
++    n = 9;
++  } else {
++    resp[7] = fc;
++  }
++  put_u16(resp + 4, (uint16_t)(n - 6));
++  resp_len = n;
++  return (int)frame;
++}
++
++static bool read_control(uint16_t offset, const ModbusSmart1Control &c, uint16_t &value)
++{
++  switch(offset)
++  {
++    case 0: value = c.setpoint; return true;
++    case 1: value = c.pause; return true;
++    case 2: value = c.start_stop; return true;
++    case 3: value = c.timeout; return true;
++  }
++  return false;
++}
++
++bool modbus_smart1_read(uint16_t addr, const ModbusSmart1Data &d, uint16_t &value)
++{
++  uint8_t state = d.evse_state;
++  bool off = state >= STATE_SLEEPING || STATE_STARTING == state;
++  uint32_t u32 = 0;
++
++  value = 0;
++  switch(addr)
++  {
++    // Charge point status, 999..1006
++    case 999: return true;
++    case 1000:
++      switch(state) {
++        case STATE_NOT_CONNECTED:      value = 2; break;
++        case STATE_CONNECTED:          value = d.session ? 12 : 7; break;
++        case STATE_CHARGING:           value = 9; break;
++        case STATE_VENT_REQUIRED:      value = d.session ? 11 : 10; break;
++        case STATE_DIODE_CHECK_FAILED: value = 13; break;
++        case STATE_GFI_FAULT:          value = 14; break;
++        default:                       value = d.fault ? 13 : 0; break;
++      }
++      return true;
++    case 1001:
++      if(STATE_CONNECTED == state && d.session) value = 5;
++      else if(STATE_CHARGING == state) value = 2;
++      else if(d.fault) value = 7;
++      else if(off) value = d.waiting_for_auth ? 1 : (d.session ? 4 : 0);
++      return true;
++    case 1002: value = off ? 0 : 1; return true;
++    case 1003: value = d.waiting_for_auth ? (off ? 3 : 2) : 1; return true;
++    case 1004: value = d.max_hardware_current; return true;
++    case 1005: value = d.max_configured_current; return true;
++    case 1006: value = d.charge_current; return true;
++
++    // Measurements, 1099..1111 (32 bit values low word first)
++    case 1099: return true;
++    case 1100: case 1101: u32 = d.power; break;
++    case 1102: case 1103: u32 = d.power_l1; break;
++    case 1104: case 1105: u32 = d.power_l2; break;
++    case 1106: case 1107: u32 = d.power_l3; break;
++    case 1108: case 1109: u32 = d.total_energy; break;
++    case 1110: value = d.min_current; return true;
++    case 1111: value = d.fault ? state : 0; return true;
++
++    // Charging session, 1199..1228
++    case 1220: case 1221: u32 = d.session_energy; break;
++    case 1222: value = d.session_elapsed > 0xFFFF ? 0xFFFF : (uint16_t)d.session_elapsed; return true;
++    case 1224: case 1225: u32 = d.start_time; break;
++    case 1226: case 1227: u32 = d.stop_time; break;
++    case 1228:
++      if(!d.session) value = 0;
++      else if(STATE_CHARGING == state) value = 1;
++      else if(off) value = 2;
++      else value = 3;
++      return true;
++
++    default:
++      if(addr >= MODBUS_SMART1_POWER_CONTROL && addr < MODBUS_SMART1_POWER_CONTROL + MODBUS_SMART1_CONTROL_SIZE) {
++        return read_control(addr - MODBUS_SMART1_POWER_CONTROL, d.power_control, value);
++      }
++      if(addr >= MODBUS_SMART1_CURRENT_CONTROL && addr < MODBUS_SMART1_CURRENT_CONTROL + MODBUS_SMART1_CONTROL_SIZE) {
++        return read_control(addr - MODBUS_SMART1_CURRENT_CONTROL, d.current_control, value);
++      }
++      // Unused addresses in the session blocks read 0 (1299..1327 is the
++      // second charge point of the layout, always empty here)
++      return (addr >= 1199 && addr <= 1228) || (addr >= 1299 && addr <= 1327);
++  }
++
++  // 32 bit value: even address = low word
++  value = (addr % 2 == 0) ? (u32 & 0xFFFF) : (u32 >> 16);
++  return true;
++}
++
++uint32_t modbus_smart1_power_to_amps(uint16_t watts, double volts, uint8_t phases)
++{
++  if(volts <= 0 || 0 == phases) {
++    return 0;
++  }
++  return (uint32_t)(watts / (volts * phases));
++}
++
++uint32_t modbus_smart1_current_to_amps(uint16_t centiamps)
++{
++  if(centiamps < MODBUS_SMART1_MIN_CURRENT_CA || centiamps > MODBUS_SMART1_MAX_CURRENT_CA) {
++    return 0;
++  }
++  return centiamps / 100;
++}
+diff --git a/src/modbus_tcp_protocol.h b/src/modbus_tcp_protocol.h
+new file mode 100644
+index 00000000..04f9d21a
+--- /dev/null
++++ b/src/modbus_tcp_protocol.h
+@@ -0,0 +1,95 @@
++#ifndef _OPENEVSE_MODBUS_TCP_PROTOCOL_H
++#define _OPENEVSE_MODBUS_TCP_PROTOCOL_H
++
++// Pure Modbus TCP frame handling and the smart1-compatible register map.
++// No Arduino/Mongoose includes, so it is host-testable (test/test_modbus_tcp).
++// The network side and the EvseManager glue live in modbus_tcp.cpp.
++
++#include <stdint.h>
++#include <stddef.h>
++
++#define MODBUS_TCP_MBAP_SIZE            7     // transaction, protocol, length, unit
++#define MODBUS_TCP_MAX_FRAME            260   // MBAP + max PDU (253)
++
++#define MODBUS_FC_READ_HOLDING          0x03
++#define MODBUS_FC_READ_INPUT            0x04
++#define MODBUS_FC_WRITE_SINGLE          0x06
++#define MODBUS_FC_WRITE_MULTIPLE        0x10
++
++#define MODBUS_EX_ILLEGAL_FUNCTION      0x01
++#define MODBUS_EX_ILLEGAL_ADDRESS       0x02
++#define MODBUS_EX_ILLEGAL_VALUE         0x03
++#define MODBUS_EX_GATEWAY_TARGET_FAILED 0x0B
++
++#define MODBUS_TCP_MAX_READ             125
++#define MODBUS_TCP_MAX_WRITE            123
++
++// Register blocks of the smart1 layout
++#define MODBUS_SMART1_POWER_CONTROL     1599  // 1599..1602
++#define MODBUS_SMART1_CURRENT_CONTROL   1999  // 1999..2002
++#define MODBUS_SMART1_CONTROL_SIZE      4
++
++#define MODBUS_SMART1_MIN_CURRENT_CA    600   // 6.00 A
++#define MODBUS_SMART1_MAX_CURRENT_CA    8000  // 80.00 A
++
++class ModbusRegisterHandler
++{
++  public:
++    virtual ~ModbusRegisterHandler() {}
++    // Returns false if the address is not readable (exception 2)
++    virtual bool readRegister(uint16_t addr, uint16_t &value) = 0;
++    // Writes count consecutive registers; returns 0 or a Modbus exception code
++    virtual uint8_t writeRegisters(uint16_t start, uint16_t count, const uint16_t *values) = 0;
++};
++
++// Handles one Modbus TCP request at the start of buf.
++//   > 0  bytes consumed; response written to resp (MODBUS_TCP_MAX_FRAME bytes), length in resp_len
++//   0    incomplete frame, wait for more data
++//   < 0  malformed frame, the connection should be closed
++// Requests for unit_id, 0 or 255 are served, any other unit gets exception 0x0B.
++int modbus_tcp_process(const uint8_t *buf, size_t len, uint8_t unit_id,
++                       ModbusRegisterHandler &handler, uint8_t *resp, size_t &resp_len);
++
++// One control block (1599..1602 power in W, 1999..2002 current in 0.01 A)
++struct ModbusSmart1Control
++{
++  uint16_t setpoint;
++  uint16_t pause;       // 1 = pause while charging
++  uint16_t start_stop;  // 1 = enable, 2 = disable
++  uint16_t timeout;     // watchdog in s, 0 = off
++};
++
++// Snapshot of everything the read side of the register map needs
++struct ModbusSmart1Data
++{
++  uint8_t evse_state;          // OPENEVSE_STATE_*
++  bool fault;
++  bool session;                // a charge started since the vehicle was plugged in
++  bool waiting_for_auth;       // RFID enabled and no tag authenticated
++  uint16_t max_hardware_current;
++  uint16_t max_configured_current;
++  uint16_t charge_current;
++  uint16_t min_current;
++  uint32_t power;              // W
++  uint32_t power_l1;           // W, 0 if unknown
++  uint32_t power_l2;
++  uint32_t power_l3;
++  uint32_t total_energy;       // kWh
++  uint32_t session_energy;     // Wh
++  uint32_t session_elapsed;    // s
++  uint32_t start_time;         // hhmmss local time, 0 = none
++  uint32_t stop_time;          // hhmmss local time, 0 = none
++  ModbusSmart1Control power_control;
++  ModbusSmart1Control current_control;
++};
++
++// Returns false if addr is not part of the register map
++bool modbus_smart1_read(uint16_t addr, const ModbusSmart1Data &data, uint16_t &value);
++
++// Power setpoint (W) to whole amps, 0 if it cannot be converted
++uint32_t modbus_smart1_power_to_amps(uint16_t watts, double volts, uint8_t phases);
++
++// Current setpoint (0.01 A) to whole amps, 0 if out of range
++uint32_t modbus_smart1_current_to_amps(uint16_t centiamps);
++
++#endif // _OPENEVSE_MODBUS_TCP_PROTOCOL_H
+diff --git a/src/mqtt.cpp b/src/mqtt.cpp
+index 5e66d75e..39cb3d80 100644
+--- a/src/mqtt.cpp
++++ b/src/mqtt.cpp
+@@ -18,6 +18,12 @@
+ #include "manual.h"
+ #include "scheduler.h"
+ #include "current_shaper.h"
++#include "grid_dimming.h"
++#ifdef KINETOS_EXTRAS
++#include "kinetos/kinetos_ha.h"
++#include "kinetos/kinetos_led.h"
++#endif
++#include "grid_dimming_calc.h"
+ #include "home_battery.h"
+ 
+ Mqtt mqtt(evse); // global instance
+@@ -272,6 +278,12 @@ void Mqtt::onMqttConnect() {
+   event_send(doc);
+ 
+   subscribeTopics();
++#ifdef KINETOS_EXTRAS
++  kinetos_ha_discovery([this](const String &topic, const String &payload, bool retain) {
++    String t = topic, p = payload;
++    _mqttclient.publish(t, p, retain);
++  });
++#endif
+   publishInitialState();
+ }
+ 
+@@ -342,6 +354,7 @@ void Mqtt::subscribeTopics() {
+   // Settable topics
+   _mqttclient.subscribe(mqtt_topic + "/divertmode/set"); yield();
+   _mqttclient.subscribe(mqtt_topic + "/shaper/set"); yield();
++  _mqttclient.subscribe(mqtt_topic + "/dimming/set"); yield();
+   _mqttclient.subscribe(mqtt_topic + "/override/set"); yield();
+   _mqttclient.subscribe(mqtt_topic + "/claim/set"); yield();
+   _mqttclient.subscribe(mqtt_topic + "/schedule/set"); yield();
+@@ -447,6 +460,9 @@ void Mqtt::handleMqttMessage(MongooseString topic, MongooseString payload) {
+   if (topic_string == mqtt_solar){
+     int solar = payload_str.toInt();
+     divert.setSolar(solar);
++#ifdef KINETOS_EXTRAS
++    kinetos_pv_feed_seen();
++#endif
+     DBUGF("solar:%dW", solar);
+     divert.update_state();
+     if (shaper.getState()) {
+@@ -456,6 +472,9 @@ void Mqtt::handleMqttMessage(MongooseString topic, MongooseString payload) {
+   else if (topic_string == mqtt_grid_ie) {
+     int grid_ie = payload_str.toInt();
+     divert.setGridIe(grid_ie);
++#ifdef KINETOS_EXTRAS
++    kinetos_pv_feed_seen();
++#endif
+     DBUGF("grid:%dW", grid_ie);
+     divert.update_state();
+     if (mqtt_live_pwr == mqtt_grid_ie) {
+@@ -483,6 +502,12 @@ void Mqtt::handleMqttMessage(MongooseString topic, MongooseString payload) {
+   }
+   else if (topic_string == mqtt_vehicle_eta && vehicle_data_src == VEHICLE_DATA_SRC_MQTT) {
+     int vehicle_eta = payload_str.toInt();
++#ifdef KINETOS_EXTRAS
++    // TeslaMate publishes time_to_full_charge in hours (e.g. "1.25")
++    if (topic_string.endsWith("time_to_full_charge")) {
++      vehicle_eta = (int)(payload_str.toFloat() * 3600);
++    }
++#endif
+     _evse->setVehicleEta(vehicle_eta);
+     StaticJsonDocument<128> event; event["time_to_full_charge"] = vehicle_eta; event_send(event);
+   }
+@@ -513,6 +538,12 @@ void Mqtt::handleMqttMessage(MongooseString topic, MongooseString payload) {
+     byte newshaper = payload_str.toInt();
+     if (newshaper==0) shaper.setState(false); else if (newshaper==1) shaper.setState(true);
+   }
++  else if (topic_string == mqtt_topic + "/dimming/set") {
++    bool active;
++    if (!grid_dimming_parse_state(payload_str.c_str(), active) || !gridDimming.setRemote(active)) {
++      DBUGLN("MQTT dimming/set rejected");
++    }
++  }
+   else if (topic_string == mqtt_topic + "/override/set") {
+     if (payload_str.equals("clear")) {
+       if (manual.release()) {
+diff --git a/src/sdm_meter.cpp b/src/sdm_meter.cpp
+new file mode 100644
+index 00000000..b2be8c34
+--- /dev/null
++++ b/src/sdm_meter.cpp
+@@ -0,0 +1,195 @@
++#if defined(ENABLE_DEBUG) && !defined(ENABLE_DEBUG_SDM_METER)
++#undef ENABLE_DEBUG
++#endif
++
++#ifdef ENABLE_SDM_METER
++
++#include "sdm_meter.h"
++#include "debug.h"
++#include "event.h"
++
++#define SDM_METER_TIMEOUT     250   // ms to wait for a response
++#define SDM_METER_GAP         20    // ms between requests
++#define SDM_METER_VALID_AGE   10000 // ms a value stays valid
++#define SDM_METER_PUBLISH     10000 // ms between MQTT/websocket updates
++#define SDM_METER_ABSENT_AFTER 30000 // ms without any answer -> no meter fitted
++#define SDM_METER_PROBE       60000 // ms between probes while absent
++
++// SDM630 input registers (FC 0x04, IEEE-754 float, big-endian)
++const uint16_t SdmMeter::_registers[SdmMeter::ValueCount] = {
++  0x0000, 0x0002, 0x0004, // voltage L1-L3
++  0x0006, 0x0008, 0x000A, // current L1-L3
++  0x000C, 0x000E, 0x0010, // active power L1-L3
++  0x0034,                 // total system power
++  0x0048,                 // import active energy kWh
++  0x0156                  // total active energy kWh
++};
++
++SdmMeter::SdmMeter() :
++  MicroTasks::Task(),
++  _index(0),
++  _rxLen(0),
++  _sentAt(0),
++  _waiting(false),
++  _published(0),
++  _lastResponse(0),
++  _absent(false),
++  _requests(0),
++  _responses(0),
++  _errors(0)
++{
++  for(int i = 0; i < ValueCount; i++) {
++    _values[i] = 0;
++    _updated[i] = 0;
++  }
++}
++
++void SdmMeter::begin()
++{
++  MicroTask.startTask(this);
++}
++
++void SdmMeter::setup()
++{
++  _lastResponse = millis();
++  SDM_METER_SERIAL.begin(SDM_METER_BAUD, SERIAL_8N1, SDM_METER_RX, SDM_METER_TX);
++}
++
++uint16_t SdmMeter::crc16(const uint8_t *data, size_t len)
++{
++  uint16_t crc = 0xFFFF;
++  for(size_t i = 0; i < len; i++)
++  {
++    crc ^= data[i];
++    for(int b = 0; b < 8; b++) {
++      crc = (crc & 1) ? (crc >> 1) ^ 0xA001 : crc >> 1;
++    }
++  }
++  return crc;
++}
++
++void SdmMeter::sendRequest()
++{
++  uint16_t reg = _registers[_index];
++  uint8_t req[8] = {
++    SDM_METER_ADDRESS, 0x04,
++    (uint8_t)(reg >> 8), (uint8_t)(reg & 0xFF),
++    0x00, 0x02,
++    0, 0
++  };
++  uint16_t crc = crc16(req, 6);
++  req[6] = crc & 0xFF;
++  req[7] = crc >> 8;
++
++  while(SDM_METER_SERIAL.available()) {
++    SDM_METER_SERIAL.read();
++  }
++  SDM_METER_SERIAL.write(req, sizeof(req));
++  _rxLen = 0;
++  _sentAt = millis();
++  _waiting = true;
++  _requests++;
++}
++
++// Response: slave, 0x04, 0x04, 4 data bytes (big-endian float), CRC lo, CRC hi
++bool SdmMeter::handleResponse()
++{
++  while(SDM_METER_SERIAL.available() && _rxLen < sizeof(_rx)) {
++    _rx[_rxLen++] = SDM_METER_SERIAL.read();
++  }
++  if(_rxLen < sizeof(_rx)) {
++    return false;
++  }
++
++  uint16_t crc = crc16(_rx, 7);
++  if(_rx[0] != SDM_METER_ADDRESS || _rx[1] != 0x04 || _rx[2] != 0x04 ||
++     _rx[7] != (crc & 0xFF) || _rx[8] != (crc >> 8))
++  {
++    DBUGF("SdmMeter: bad response for reg 0x%04x", _registers[_index]);
++    _errors++;
++    return true;
++  }
++
++  uint32_t raw = ((uint32_t)_rx[3] << 24) | ((uint32_t)_rx[4] << 16) | ((uint32_t)_rx[5] << 8) | _rx[6];
++  float value;
++  memcpy(&value, &raw, sizeof(value));
++  if(!isnan(value)) {
++    _values[_index] = value;
++    _updated[_index] = millis();
++    _responses++;
++    _lastResponse = millis();
++    _absent = false;
++  }
++  return true;
++}
++
++unsigned long SdmMeter::loop(MicroTasks::WakeReason reason)
++{
++  if(_waiting)
++  {
++    bool done = handleResponse();
++    if(!done && millis() - _sentAt < SDM_METER_TIMEOUT) {
++      return 5;
++    }
++    if(!done) {
++      _errors++;
++    }
++    _waiting = false;
++    if(!_absent && millis() - _lastResponse >= SDM_METER_ABSENT_AFTER) {
++      DBUGLN("SdmMeter: no answer, assuming no meter fitted");
++      _absent = true;
++    }
++    if(_absent) {
++      _index = 0;
++      return SDM_METER_PROBE;
++    }
++    _index = (_index + 1) % ValueCount;
++    if(0 == _index && isValid() && millis() - _published >= SDM_METER_PUBLISH) {
++      publish();
++    }
++    return SDM_METER_GAP;
++  }
++
++  sendRequest();
++  return 5;
++}
++
++// Per-phase values are not part of the monitor events, so send them to MQTT / websocket here
++void SdmMeter::publish()
++{
++  StaticJsonDocument<256> event;
++  event["amp2"] = _values[CurrentL2];
++  event["amp3"] = _values[CurrentL3];
++  event["voltage2"] = _values[VoltageL2];
++  event["voltage3"] = _values[VoltageL3];
++    event["phases"] = activePhases();
++  event["meter_import_kwh"] = _values[ImportEnergy];
++  event_send(event);
++  _published = millis();
++}
++
++bool SdmMeter::isValid()
++{
++  uint32_t now = millis();
++  for(int i = 0; i < ValueCount; i++) {
++    if(0 == _updated[i] || now - _updated[i] > SDM_METER_VALID_AGE) {
++      return false;
++    }
++  }
++  return true;
++}
++
++uint8_t SdmMeter::activePhases()
++{
++  uint8_t phases = 0;
++  for(int i = CurrentL1; i <= CurrentL3; i++) {
++    if(_values[i] > 1.0) {
++      phases++;
++    }
++  }
++  return phases;
++}
++
++SdmMeter sdmMeter;
++
++#endif // ENABLE_SDM_METER
+diff --git a/src/sdm_meter.h b/src/sdm_meter.h
+new file mode 100644
+index 00000000..d1d6bd83
+--- /dev/null
++++ b/src/sdm_meter.h
+@@ -0,0 +1,82 @@
++// Eastron SDM630 / SDM72D-M (or compatible) energy meter over Modbus RTU.
++// Reads voltage, current and power per phase plus total power and energy, so boards with a
++// three-phase MID meter report real values instead of V x A x 3 from the controller's single CT.
++// Enable with -D ENABLE_SDM_METER; the RS485 transceiver must switch direction automatically.
++#ifndef SDM_METER_H
++#define SDM_METER_H
++
++#include <Arduino.h>
++#include <MicroTasks.h>
++
++#ifndef SDM_METER_SERIAL
++#define SDM_METER_SERIAL Serial2
++#endif
++#ifndef SDM_METER_RX
++#define SDM_METER_RX -1
++#endif
++#ifndef SDM_METER_TX
++#define SDM_METER_TX -1
++#endif
++#ifndef SDM_METER_BAUD
++#define SDM_METER_BAUD 9600
++#endif
++#ifndef SDM_METER_ADDRESS
++#define SDM_METER_ADDRESS 1
++#endif
++
++class SdmMeter : public MicroTasks::Task
++{
++  public:
++    enum Value {
++      VoltageL1, VoltageL2, VoltageL3,
++      CurrentL1, CurrentL2, CurrentL3,
++      PowerL1, PowerL2, PowerL3,
++      PowerTotal, ImportEnergy, TotalEnergy,
++      ValueCount
++    };
++
++  private:
++    static const uint16_t _registers[ValueCount];
++    float _values[ValueCount];
++    uint32_t _updated[ValueCount];
++    uint8_t _index;
++    uint8_t _rx[9];
++    uint8_t _rxLen;
++    uint32_t _sentAt;
++    bool _waiting;
++    uint32_t _published;
++    uint32_t _lastResponse;
++    bool _absent;
++    uint32_t _requests;
++    uint32_t _responses;
++    uint32_t _errors;
++
++    static uint16_t crc16(const uint8_t *data, size_t len);
++    void sendRequest();
++    bool handleResponse();
++    void publish();
++
++  protected:
++    void setup();
++    unsigned long loop(MicroTasks::WakeReason reason);
++
++  public:
++    SdmMeter();
++    void begin();
++
++    // True when every value was refreshed within the last 10 s
++    bool isValid();
++    // false once the meter has not answered for 30 s (no meter fitted); probed once a minute
++    bool isPresent() { return !_absent; }
++    float get(Value v) { return _values[v]; }
++    // Number of phases currently carrying more than 1 A
++    uint8_t activePhases();
++
++    uint32_t getRequests() { return _requests; }
++    uint32_t getResponses() { return _responses; }
++    uint32_t getErrors() { return _errors; }
++};
++
++extern SdmMeter sdmMeter;
++
++#endif // SDM_METER_H
+diff --git a/src/web_server.cpp b/src/web_server.cpp
+index 32200661..9174213e 100644
+--- a/src/web_server.cpp
++++ b/src/web_server.cpp
+@@ -53,6 +53,7 @@ typedef const __FlashStringHelper *fstr_t;
+ #include "loadsharing_peer_poller.h"
+ #include "boost.h"
+ #include "notifications.h"
++#include "grid_dimming.h"
+ #include "web_auth.h"
+ #include "web_auth_secret.h"
+ 
+@@ -544,9 +545,9 @@ static String html_escape(const String &input) {
+ // call sites had drifted: onWsConnect sized its document for 40 members while
+ // buildStatus emits around 95, so every websocket connect pushed a silently
+ // truncated status. ArduinoJson does not signal that with an error -- it just
+-// stops adding members. 131 = 128 plus the "notifications" object and its two
+-// members (count, severity).
+-#define STATUS_JSON_CAPACITY (JSON_OBJECT_SIZE(131) + 2048)
++// stops adding members. 134 = 128 plus the "notifications" object and its two
++// members (count, severity), plus the three dimming_* members.
++#define STATUS_JSON_CAPACITY (JSON_OBJECT_SIZE(134) + 2048)
+ 
+ // LittleFS.totalBytes() and LittleFS.usedBytes() each run lfs_fs_size(), a
+ // full traversal of every metadata pair and data block in the filesystem,
+@@ -675,6 +676,9 @@ void buildStatus(DynamicJsonDocument &doc) {
+   doc["service_level"] = static_cast<uint8_t>(evse.getActualServiceLevel());
+   doc["limit"] = limit.hasLimit();
+   doc["boost"] = boost.isActive();
++  doc["dimming_active"] = gridDimming.isActive();
++  doc["dimming_source"] = (uint8_t)gridDimming.getSource();
++  doc["dimming_limit_a"] = gridDimming.getLimitAmps();
+ 
+   doc["ota_update"] = (int)Update.isRunning();
+ 
+@@ -2293,6 +2297,7 @@ void web_server_setup()
+   server.on("/apoff$", handleAPOff);
+   server.on("/divertmode$", handleDivertMode);
+   server.on("/shaper$", handleCurrentShaper);
++  server.on("/dimming$", handleDimming);
+   server.on("/emoncms/describe$", handleDescribe);
+   server.on("/rfid/add$", handleAddRFID);
+   server.on("/rfid/users$", handleRfidUsers);
+diff --git a/src/web_server.h b/src/web_server.h
+index 25b15707..29dba6ef 100644
+--- a/src/web_server.h
++++ b/src/web_server.h
+@@ -74,6 +74,8 @@ void handleLogout(MongooseHttpServerRequest *request);
+ bool actuatorMethodAllowed(MongooseHttpServerRequest *request,
+                            MongooseHttpServerResponseStream *response);
+ 
++void handleDimming(MongooseHttpServerRequest *request);
++
+ void handleNotifications(MongooseHttpServerRequest *request);
+ void handleNotificationAck(MongooseHttpServerRequest *request);
+ 
+diff --git a/src/web_server_dimming.cpp b/src/web_server_dimming.cpp
+new file mode 100644
+index 00000000..1544dcaa
+--- /dev/null
++++ b/src/web_server_dimming.cpp
+@@ -0,0 +1,55 @@
++#if defined(ENABLE_DEBUG) && !defined(ENABLE_DEBUG_WEB)
++#undef ENABLE_DEBUG
++#endif
++
++#include "debug.h"
++#include "web_server.h"
++#include "grid_dimming.h"
++#include "grid_dimming_calc.h"
++
++// -------------------------------------------------------------------
++// Grid operator dimming state
++//
++// url: GET /dimming   current state
++//      POST /dimming  body "1"/"0" (also on/off, true/false) sets the
++//                     remote dimming request
++// -------------------------------------------------------------------
++void handleDimming(MongooseHttpServerRequest *request)
++{
++  MongooseHttpServerResponseStream *response;
++  if(false == requestPreProcess(request, response)) {
++    return;
++  }
++
++  if(HTTP_POST == request->method())
++  {
++    bool active;
++    String body = request->body().toString();
++    if(!grid_dimming_parse_state(body.c_str(), active)) {
++      response->setCode(400);
++      response->print("{\"msg\":\"expected 1 or 0\"}");
++      request->send(response);
++      return;
++    }
++    if(!gridDimming.setRemote(active)) {
++      response->setCode(409);
++      response->print("{\"msg\":\"dimming is disabled\"}");
++      request->send(response);
++      return;
++    }
++    DBUGF("Dimming remote request: %d", active);
++  }
++  else if(HTTP_GET != request->method())
++  {
++    response->setCode(405);
++    response->print("{\"msg\":\"Method not allowed\"}");
++    request->send(response);
++    return;
++  }
++
++  StaticJsonDocument<192> doc;
++  gridDimming.serialize(doc);
++  response->setCode(200);
++  serializeJson(doc, *response);
++  request->send(response);
++}
+diff --git a/test/test_grid_dimming/test_grid_dimming.cpp b/test/test_grid_dimming/test_grid_dimming.cpp
+new file mode 100644
+index 00000000..704b3144
+--- /dev/null
++++ b/test/test_grid_dimming/test_grid_dimming.cpp
+@@ -0,0 +1,51 @@
++#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
++#include "doctest.h"
++#include "grid_dimming_calc.h"
++
++TEST_CASE("4200 W limit: single phase and three phase") {
++  // floor(4200 / 230) = 18, floor(4200 / 690) = 6
++  CHECK(grid_dimming_limit_amps(4200, 1, 6) == 18);
++  CHECK(grid_dimming_limit_amps(4200, 3, 6) == 6);
++}
++
++TEST_CASE("result rounds down so the limit is never exceeded") {
++  CHECK(grid_dimming_limit_amps(4139, 1, 6) == 17);   // 4139 / 230 = 17.99
++  CHECK(grid_dimming_limit_amps(4140, 1, 6) == 18);
++  CHECK(grid_dimming_limit_amps(11000, 3, 6) == 15);  // 11000 / 690 = 15.94
++}
++
++TEST_CASE("never below the EVSE minimum current") {
++  CHECK(grid_dimming_limit_amps(4000, 3, 6) == 6);    // 5.79 A -> min 6 A
++  CHECK(grid_dimming_limit_amps(0, 1, 6) == 6);
++  CHECK(grid_dimming_limit_amps(4200, 3, 8) == 8);
++}
++
++TEST_CASE("zero phases is treated as single phase") {
++  CHECK(grid_dimming_limit_amps(4200, 0, 6) == 18);
++}
++
++TEST_CASE("parse accepts 1/0, on/off, true/false") {
++  bool active = false;
++  CHECK(grid_dimming_parse_state("1", active));
++  CHECK(active);
++  CHECK(grid_dimming_parse_state("0", active));
++  CHECK_FALSE(active);
++  CHECK(grid_dimming_parse_state("ON", active));
++  CHECK(active);
++  CHECK(grid_dimming_parse_state("off", active));
++  CHECK_FALSE(active);
++  CHECK(grid_dimming_parse_state(" True\n", active));
++  CHECK(active);
++  CHECK(grid_dimming_parse_state("false", active));
++  CHECK_FALSE(active);
++}
++
++TEST_CASE("parse rejects anything else and leaves the state alone") {
++  bool active = true;
++  CHECK_FALSE(grid_dimming_parse_state("", active));
++  CHECK_FALSE(grid_dimming_parse_state("2", active));
++  CHECK_FALSE(grid_dimming_parse_state("onn", active));
++  CHECK_FALSE(grid_dimming_parse_state("{\"active\":false}", active));
++  CHECK_FALSE(grid_dimming_parse_state(nullptr, active));
++  CHECK(active);
++}
+diff --git a/test/test_modbus_tcp/test_modbus_tcp.cpp b/test/test_modbus_tcp/test_modbus_tcp.cpp
+new file mode 100644
+index 00000000..da6f8b8c
+--- /dev/null
++++ b/test/test_modbus_tcp/test_modbus_tcp.cpp
+@@ -0,0 +1,213 @@
++#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
++#include "doctest.h"
++#include <string.h>
++#include <vector>
++#include "modbus_tcp_protocol.h"
++
++// Serves the smart1 register map from a data snapshot and records writes
++class FakeMap : public ModbusRegisterHandler
++{
++  public:
++    ModbusSmart1Data data;
++    std::vector<uint16_t> written;
++    uint16_t written_start = 0;
++
++    FakeMap() { memset(&data, 0, sizeof(data)); }
++
++    bool readRegister(uint16_t addr, uint16_t &value) override {
++      return modbus_smart1_read(addr, data, value);
++    }
++    uint8_t writeRegisters(uint16_t start, uint16_t count, const uint16_t *values) override {
++      if(start < 1599 || start + count > 1603) {
++        return MODBUS_EX_ILLEGAL_ADDRESS;
++      }
++      written_start = start;
++      written.assign(values, values + count);
++      return 0;
++    }
++};
++
++static std::vector<uint8_t> frame(uint8_t unit, std::vector<uint8_t> pdu, uint16_t tid = 0x1234)
++{
++  std::vector<uint8_t> f = { (uint8_t)(tid >> 8), (uint8_t)tid, 0, 0,
++                             (uint8_t)((pdu.size() + 1) >> 8), (uint8_t)(pdu.size() + 1), unit };
++  f.insert(f.end(), pdu.begin(), pdu.end());
++  return f;
++}
++
++struct Result {
++  int used;
++  std::vector<uint8_t> resp;
++};
++
++static Result run(FakeMap &map, const std::vector<uint8_t> &req)
++{
++  uint8_t resp[MODBUS_TCP_MAX_FRAME];
++  size_t n = 0;
++  int used = modbus_tcp_process(req.data(), req.size(), 1, map, resp, n);
++  return { used, std::vector<uint8_t>(resp, resp + n) };
++}
++
++static uint16_t reg(const Result &r, int i) {
++  return (r.resp[9 + i * 2] << 8) | r.resp[10 + i * 2];
++}
++
++TEST_CASE("FC3 read returns MBAP echo and register values") {
++  FakeMap map;
++  map.data.max_hardware_current = 32;
++  map.data.charge_current = 16;
++  auto req = frame(1, { 0x03, 0x03, 0xE7, 0x00, 0x08 }); // 999, 8 registers
++  Result r = run(map, req);
++  CHECK(r.used == (int)req.size());
++  REQUIRE(r.resp.size() == 9 + 16);
++  CHECK(r.resp[0] == 0x12); CHECK(r.resp[1] == 0x34);  // transaction id
++  CHECK(r.resp[5] == 3 + 16);                          // length
++  CHECK(r.resp[6] == 1);
++  CHECK(r.resp[7] == 0x03);
++  CHECK(r.resp[8] == 16);
++  CHECK(reg(r, 5) == 32);   // 1004
++  CHECK(reg(r, 7) == 16);   // 1006
++}
++
++TEST_CASE("32 bit values are low word first") {
++  FakeMap map;
++  map.data.power = 0x00012345;
++  Result r = run(map, frame(1, { 0x04, 0x04, 0x4C, 0x00, 0x02 })); // FC4 1100, 2
++  CHECK(r.resp[7] == 0x04);
++  CHECK(reg(r, 0) == 0x2345);
++  CHECK(reg(r, 1) == 0x0001);
++}
++
++TEST_CASE("exceptions") {
++  FakeMap map;
++  // unknown register -> 2
++  Result r = run(map, frame(1, { 0x03, 0x01, 0xF4, 0x00, 0x01 }));
++  CHECK(r.resp[7] == 0x83); CHECK(r.resp[8] == 0x02); CHECK(r.resp[5] == 3);
++  // read past the end of a block -> 2
++  r = run(map, frame(1, { 0x03, 0x04, 0x56, 0x00, 0x03 })); // 1110..1112
++  CHECK(r.resp[8] == 0x02);
++  // count 0 and 126 -> 3
++  r = run(map, frame(1, { 0x03, 0x03, 0xE7, 0x00, 0x00 }));
++  CHECK(r.resp[8] == 0x03);
++  r = run(map, frame(1, { 0x03, 0x03, 0xE7, 0x00, 0x7E }));
++  CHECK(r.resp[8] == 0x03);
++  // unsupported function -> 1
++  r = run(map, frame(1, { 0x01, 0x00, 0x00, 0x00, 0x01 }));
++  CHECK(r.resp[7] == 0x81); CHECK(r.resp[8] == 0x01);
++  // wrong unit -> 0x0B, unit 0 and 255 accepted
++  r = run(map, frame(7, { 0x03, 0x03, 0xE7, 0x00, 0x01 }));
++  CHECK(r.resp[8] == 0x0B);
++  r = run(map, frame(0, { 0x03, 0x03, 0xE7, 0x00, 0x01 }));
++  CHECK(r.resp[7] == 0x03); CHECK(r.resp[6] == 0);
++  r = run(map, frame(255, { 0x03, 0x03, 0xE7, 0x00, 0x01 }));
++  CHECK(r.resp[7] == 0x03);
++}
++
++TEST_CASE("FC6 and FC16 writes echo the request") {
++  FakeMap map;
++  Result r = run(map, frame(1, { 0x06, 0x06, 0x3F, 0x0F, 0xA0 })); // 1599 = 4000
++  CHECK(r.resp.size() == 12);
++  CHECK(r.resp[7] == 0x06);
++  CHECK(r.resp[10] == 0x0F); CHECK(r.resp[11] == 0xA0);
++  CHECK(map.written_start == 1599);
++  CHECK(map.written == std::vector<uint16_t>{ 4000 });
++
++  r = run(map, frame(1, { 0x10, 0x06, 0x3F, 0x00, 0x04, 0x08, 0x0F, 0xA0, 0x00, 0x00, 0x00, 0x01, 0x00, 0x3C }));
++  CHECK(r.resp.size() == 12);
++  CHECK(r.resp[7] == 0x10);
++  CHECK(r.resp[11] == 4);
++  CHECK(map.written == std::vector<uint16_t>{ 4000, 0, 1, 60 });
++
++  // byte count mismatch -> 3, write outside the control blocks -> 2
++  r = run(map, frame(1, { 0x10, 0x06, 0x3F, 0x00, 0x02, 0x03, 0x00, 0x00, 0x00 }));
++  CHECK(r.resp[8] == 0x03);
++  r = run(map, frame(1, { 0x06, 0x03, 0xE8, 0x00, 0x01 }));
++  CHECK(r.resp[8] == 0x02);
++}
++
++TEST_CASE("partial frames wait, bad frames close, pipelined frames are consumed one by one") {
++  FakeMap map;
++  auto req = frame(1, { 0x03, 0x03, 0xE7, 0x00, 0x01 });
++  uint8_t resp[MODBUS_TCP_MAX_FRAME];
++  size_t n = 0;
++  CHECK(modbus_tcp_process(req.data(), 5, 1, map, resp, n) == 0);
++  CHECK(modbus_tcp_process(req.data(), req.size() - 1, 1, map, resp, n) == 0);
++
++  auto bad = req;
++  bad[2] = 1; // protocol id must be 0
++  CHECK(modbus_tcp_process(bad.data(), bad.size(), 1, map, resp, n) < 0);
++  bad = req;
++  bad[5] = 1; // length too short
++  CHECK(modbus_tcp_process(bad.data(), bad.size(), 1, map, resp, n) < 0);
++
++  auto two = req;
++  two.insert(two.end(), req.begin(), req.end());
++  CHECK(modbus_tcp_process(two.data(), two.size(), 1, map, resp, n) == (int)req.size());
++}
++
++TEST_CASE("smart1 status registers") {
++  ModbusSmart1Data d;
++  memset(&d, 0, sizeof(d));
++  uint16_t v;
++
++  d.evse_state = 1; // not connected
++  modbus_smart1_read(1000, d, v); CHECK(v == 2);
++  modbus_smart1_read(1002, d, v); CHECK(v == 1);
++  modbus_smart1_read(1003, d, v); CHECK(v == 1);
++
++  d.evse_state = 2; // connected, no session yet
++  modbus_smart1_read(1000, d, v); CHECK(v == 7);
++  d.session = true; // charge finished
++  modbus_smart1_read(1000, d, v); CHECK(v == 12);
++  modbus_smart1_read(1001, d, v); CHECK(v == 5);
++  modbus_smart1_read(1228, d, v); CHECK(v == 3);
++
++  d.evse_state = 3; // charging
++  modbus_smart1_read(1000, d, v); CHECK(v == 9);
++  modbus_smart1_read(1001, d, v); CHECK(v == 2);
++  modbus_smart1_read(1228, d, v); CHECK(v == 1);
++
++  d.evse_state = 254; // sleeping (paused)
++  modbus_smart1_read(1000, d, v); CHECK(v == 0);
++  modbus_smart1_read(1001, d, v); CHECK(v == 4);
++  modbus_smart1_read(1002, d, v); CHECK(v == 0);
++  modbus_smart1_read(1228, d, v); CHECK(v == 2);
++  d.waiting_for_auth = true;
++  modbus_smart1_read(1003, d, v); CHECK(v == 3);
++
++  d.evse_state = 6; // GFI fault
++  d.fault = true;
++  modbus_smart1_read(1000, d, v); CHECK(v == 14);
++  modbus_smart1_read(1001, d, v); CHECK(v == 7);
++  modbus_smart1_read(1111, d, v); CHECK(v == 6);
++
++  d.evse_state = 15; // other fault
++  modbus_smart1_read(1000, d, v); CHECK(v == 13);
++}
++
++TEST_CASE("smart1 block ranges") {
++  ModbusSmart1Data d;
++  memset(&d, 0, sizeof(d));
++  d.current_control.setpoint = 1600;
++  d.power_control.timeout = 30;
++  uint16_t v;
++  CHECK(modbus_smart1_read(1300, d, v));
++  CHECK(modbus_smart1_read(1327, d, v));
++  CHECK_FALSE(modbus_smart1_read(1328, d, v));
++  CHECK_FALSE(modbus_smart1_read(1112, d, v));
++  CHECK_FALSE(modbus_smart1_read(1229, d, v));
++  CHECK_FALSE(modbus_smart1_read(1603, d, v));
++  CHECK(modbus_smart1_read(1999, d, v)); CHECK(v == 1600);
++  CHECK(modbus_smart1_read(1602, d, v)); CHECK(v == 30);
++  CHECK_FALSE(modbus_smart1_read(2003, d, v));
++}
++
++TEST_CASE("setpoint conversion") {
++  CHECK(modbus_smart1_power_to_amps(4140, 230, 3) == 6);
++  CHECK(modbus_smart1_power_to_amps(3680, 230, 1) == 16);
++  CHECK(modbus_smart1_power_to_amps(3680, 0, 1) == 0);
++  CHECK(modbus_smart1_current_to_amps(599) == 0);
++  CHECK(modbus_smart1_current_to_amps(600) == 6);
++  CHECK(modbus_smart1_current_to_amps(1650) == 16);
++  CHECK(modbus_smart1_current_to_amps(8001) == 0);
++}

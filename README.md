@@ -27,6 +27,8 @@ jeder sein eigenes Gerät.
 
 ## Funktionen der Firmware
 
+- Ab Rev 9 (`v5.2.0-dev-kinetos.9`) auf Basis des aktuellen OpenEVSE-master: neue Oberfläche, Load Sharing,
+  Hinweise aus den Fehlerzählern des Controllers; Einstellungen von Rev ≤ 8 werden beim ersten Start übernommen
 - LAN (LAN8720) und WLAN, aktuelle OpenEVSE-v5-API mit Claims (evcc ≥ 4.1.9 kompatibel), OCPP 1.6, MQTT
 - MID-Zähler (SDM630-Registerkarte, Modbus RTU): Strom, Spannung, Leistung pro Phase, Zählerstand;
   Leistung und Energiezählung kommen aus dem Zähler statt aus der Schätzung `V × A × 3`
@@ -35,7 +37,8 @@ jeder sein eigenes Gerät.
 - Home-Assistant-MQTT-Discovery (23 Entitäten)
 - LED-Ring: PV-Anteil als Farbe (orange → grün), WS2812FX-Animationen wählbar
 - Fahrzeugdaten von TeslaMate per MQTT
-- Einstellungen als eigene Seite „Kinetos“ in der OpenEVSE-Oberfläche
+- Einstellungen direkt in der normalen OpenEVSE-Oberfläche (Monitoring, Energy → Grid dimming,
+  Connectivity → Modbus TCP, Charger → LED, MQTT → Home Assistant, Vehicle → TeslaMate), nur Englisch
 - Absturz-Diagnose (Panic-Trap im RTC-Speicher), Roh-Eingänge, Zählerstatistik
 
 ## Schnellstart
@@ -51,8 +54,8 @@ curl http://WALLBOX/revert                            # zurück auf Kinetos
 curl -u admin:PASS http://WALLBOX/config -o config-before.json
 
 # 3. Firmware bauen (PlatformIO + Node.js) und flashen
-cd firmware && ./build.sh
-curl -u admin:PASS -F firmware=@out/openevse-v5.1.5-kinetos-mid.bin http://WALLBOX/update
+cd firmware && ./build-master.sh        # Rev 9+ (OpenEVSE master); ./build.sh = alte v5.1.5-Basis
+curl -u admin:PASS -F firmware=@out/kinetos-openevse-v5.2.0-dev-kinetos.9.bin http://WALLBOX/update
 ```
 
 Danach Web-Login, WLAN und MQTT prüfen (siehe `docs/PAPER.md`, Kap. 6.2).
