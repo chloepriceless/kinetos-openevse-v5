@@ -413,7 +413,7 @@ index 62fcc0b..0000000
 -  }
 -})
 diff --git a/src/lib/i18n/en.json b/src/lib/i18n/en.json
-index 246246e..e8b7cb6 100644
+index 246246e..b83e113 100644
 --- a/src/lib/i18n/en.json
 +++ b/src/lib/i18n/en.json
 @@ -209,6 +209,7 @@
@@ -432,7 +432,7 @@ index 246246e..e8b7cb6 100644
        "emoncms": "EmonCMS",
        "firmware": "Firmware",
        "security": "Security",
-@@ -1303,5 +1305,112 @@
+@@ -1303,5 +1305,113 @@
      "invalid": "Incorrect username or password.",
      "locked": "Too many attempts. Please wait a moment and try again.",
      "error": "Could not reach the charger. Try again."
@@ -491,7 +491,8 @@ index 246246e..e8b7cb6 100644
 +      "pv": "PV colour",
 +      "pv_desc": "Colour shows the PV share while charging.",
 +      "pv_share": "PV share now",
-+      "fx": "Charge animation"
++      "fx": "Charge animation",
++      "title": "LED ring"
 +    },
 +    "fx": {
 +      "0": "Static",
@@ -5286,7 +5287,7 @@ index 0000000..f2b9c97
 +  </ConfigSection>
 +</ConfigPage>
 diff --git a/src/routes/settings/Evse.svelte b/src/routes/settings/Evse.svelte
-index ea5d3b3..2113484 100644
+index ea5d3b3..60ac5fe 100644
 --- a/src/routes/settings/Evse.svelte
 +++ b/src/routes/settings/Evse.svelte
 @@ -3,6 +3,9 @@
@@ -5310,7 +5311,18 @@ index ea5d3b3..2113484 100644
  </script>
  
  <ConfigPage title={$_('config.pages.evse')}>
-@@ -220,6 +227,31 @@
+@@ -206,6 +213,10 @@
+         onchange={(v) => form.saveField('scheduler_start_window', v)}
+       />
+     </FormField>
++  </ConfigSection>
++
++  {#if $config_store?.led_brightness !== undefined || $config_store?.led_pv_enabled !== undefined}
++  <ConfigSection title={$_('kinetos.led.title')}>
+     {#if $config_store?.led_brightness !== undefined}
+       <FormField
+         label={$_('config.evse.led_brightness')}
+@@ -220,7 +231,33 @@
          />
        </FormField>
      {/if}
@@ -5340,8 +5352,10 @@ index ea5d3b3..2113484 100644
 +      </FormField>
 +    {/if}
    </ConfigSection>
++  {/if}
  
    <ConfigSection title={$_('config.evse.sensor')}>
+     <FormField label={$_('config.evse.scale')} status={$ss.scale ?? 'idle'}>
 diff --git a/src/routes/settings/Modbus.svelte b/src/routes/settings/Modbus.svelte
 new file mode 100644
 index 0000000..94bb02b

@@ -867,10 +867,22 @@ index c613e001..3492fd94 100644
      // Get the client whose claim is currently setting the state/charge current,
      // EvseClient_NULL if no active claim sets the property
 diff --git a/src/evse_monitor.cpp b/src/evse_monitor.cpp
-index 64a7a1dc..019bf9a4 100644
+index 64a7a1dc..e7300c21 100644
 --- a/src/evse_monitor.cpp
 +++ b/src/evse_monitor.cpp
-@@ -1117,6 +1117,13 @@ void EvseMonitor::getChargeCurrentAndVoltageFromEvse()
+@@ -175,7 +175,11 @@ EvseMonitor::EvseMonitor(OpenEVSEClass &openevse) :
+   _count(0),
+   _heartbeat(false),
+   _firmware_version(""),
++#ifdef KINETOS_EXTRAS
++  _lcd_type_supported(false), // Kinetos controller answers $S0 with $NK
++#else
+   _lcd_type_supported(true),
++#endif
+ #ifdef ENABLE_MCP9808
+   _mcp9808(),
+ #endif
+@@ -1117,6 +1121,13 @@ void EvseMonitor::getChargeCurrentAndVoltageFromEvse()
          if (config_threephase_enabled()) {
            _power = _power * 3;
          }

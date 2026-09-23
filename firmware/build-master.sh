@@ -6,7 +6,7 @@
 # Output: out/kinetos-openevse-<version>.bin (flash via the wallbox's /update page)
 set -euo pipefail
 UPSTREAM="${UPSTREAM:-a3816295}"
-VERSION="${VERSION:-v5.2.0-dev-kinetos.9}"
+VERSION="${VERSION:-v5.2.0-dev-kinetos.10}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 WORK="${WORK:-$HERE/.work-master}"
 GIT=(git -c user.name=build -c user.email=build@localhost)
