@@ -652,7 +652,7 @@ index 33f3a774..961455ae 100644
          case LedState_WiFi_Access_Point_Waiting:
            setEvseAndWifiRGB(col, FX_MODE_BLINK, CONNECTING_FX_SPEED);
 diff --git a/src/app_config.cpp b/src/app_config.cpp
-index da5c7738..4f1b6cfc 100644
+index da5c7738..3ce6e286 100644
 --- a/src/app_config.cpp
 +++ b/src/app_config.cpp
 @@ -11,7 +11,9 @@
@@ -785,6 +785,19 @@ index da5c7738..4f1b6cfc 100644
    } else if(name == "tesla_vehicle_id") {
      teslaClient.setVehicleId(tesla_vehicle_id);
    } else if(name.startsWith("tesla_")) {
+@@ -1099,6 +1145,12 @@ bool config_serialize(DynamicJsonDocument &doc, bool longNames, bool compactOutp
+ 
+   bool result = user_config.serialize(doc, longNames, compactOutput, hideSecrets);
+   config_strip_internal(doc);
++#ifdef KINETOS_EXTRAS
++  // Show the effective EVSE ID (the stored value is empty when the default is used)
++  if(longNames && !compactOutput) {
++    doc["evse_id"] = kinetos_evse_id();
++  }
++#endif
+   return result;
+ }
+ 
 diff --git a/src/app_config.h b/src/app_config.h
 index a89eb032..bfcadcf7 100644
 --- a/src/app_config.h
@@ -1622,10 +1635,10 @@ index 00000000..ad62e13a
 +#endif // KINETOS_CRASH_H
 diff --git a/src/kinetos/kinetos_extras.cpp b/src/kinetos/kinetos_extras.cpp
 new file mode 100644
-index 00000000..7ed060d3
+index 00000000..0c770398
 --- /dev/null
 +++ b/src/kinetos/kinetos_extras.cpp
-@@ -0,0 +1,202 @@
+@@ -0,0 +1,214 @@
 +#ifdef KINETOS_EXTRAS
 +
 +#include <esp_system.h>
@@ -1792,6 +1805,18 @@ index 00000000..7ed060d3
 +  pinMode(39, INPUT);
 +}
 +
++String kinetos_evse_id()
++{
++  if(kinetos_legacy_evse_id.length() > 0) {
++    return kinetos_legacy_evse_id;
++  }
++  const char *serial = evse.getChipId();
++  if(NULL == serial || 0 == serial[0]) {
++    serial = evse.getSerial();
++  }
++  return String("DE*KIG*E") + serial;
++}
++
 +void kinetos_status(JsonDocument &doc)
 +{
 +  doc["dimming_active"] = gridDimming.isActive();
@@ -1830,10 +1855,10 @@ index 00000000..7ed060d3
 +#endif // KINETOS_EXTRAS
 diff --git a/src/kinetos/kinetos_extras.h b/src/kinetos/kinetos_extras.h
 new file mode 100644
-index 00000000..2fdb5ea5
+index 00000000..ee7f7945
 --- /dev/null
 +++ b/src/kinetos/kinetos_extras.h
-@@ -0,0 +1,49 @@
+@@ -0,0 +1,52 @@
 +// Kinetos OpenEVSE V5 extras on top of the upstream firmware and the Kinetos board support
 +// (SDM meter, grid dimming, Modbus TCP): PV share on the LED ring, Home Assistant discovery,
 +// panic trap and the migration of settings written by Kinetos V5 up to rev 8 (v5.1.5 based).
@@ -1869,7 +1894,7 @@ index 00000000..2fdb5ea5
 +  new ConfigOptDefinition<uint8_t>(kinetos_legacy_p14a_pin, 14, "kinetos_legacy_p14a_pin", "p4p"), \
 +  new ConfigOptDefinition<uint32_t>(kinetos_legacy_p14a_limit, 4200, "kinetos_legacy_p14a_limit", "p4l"), \
 +  new ConfigOptDefinition<uint32_t>(kinetos_legacy_charge_count, 0, "kinetos_legacy_charge_count", "cc"), \
-+  new ConfigOptDefinition<String>(kinetos_legacy_evse_id, "", "kinetos_legacy_evse_id", "ei"),
++  new ConfigOptDefinition<String>(kinetos_legacy_evse_id, "", "evse_id", "ei"),
 +
 +// Call after the user config is loaded, before the default flags are applied.
 +// Returns true if settings were changed and need a commit.
@@ -1878,6 +1903,9 @@ index 00000000..2fdb5ea5
 +// Start-up: panic record, diagnostic inputs
 +void kinetos_begin();
 +
++// eMI3 EVSE ID: the configured one, else "DE*KIG*E" + controller serial like the Kinetos firmware
++String kinetos_evse_id();
++
 +// Extra /status fields
 +void kinetos_status(JsonDocument &doc);
 +
@@ -1885,10 +1913,10 @@ index 00000000..2fdb5ea5
 +#endif // KINETOS_EXTRAS_H
 diff --git a/src/kinetos/kinetos_ha.cpp b/src/kinetos/kinetos_ha.cpp
 new file mode 100644
-index 00000000..86c20ada
+index 00000000..71c56f4f
 --- /dev/null
 +++ b/src/kinetos/kinetos_ha.cpp
-@@ -0,0 +1,171 @@
+@@ -0,0 +1,172 @@
 +#ifdef KINETOS_EXTRAS
 +
 +#include <ArduinoJson.h>
@@ -1946,6 +1974,7 @@ index 00000000..86c20ada
 +  dev["mf"] = "Kinetos / Bond Electronics";
 +  dev["mdl"] = "Kinetos OpenEVSE V5";
 +  dev["sw"] = currentfirmware;
++  dev["sn"] = kinetos_evse_id();
 +  dev["cu"] = "http://" + esp_hostname + ".local/";
 +}
 +

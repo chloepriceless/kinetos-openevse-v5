@@ -55,7 +55,7 @@ curl -u admin:PASS http://WALLBOX/config -o config-before.json
 
 # 3. Firmware bauen (PlatformIO + Node.js) und flashen
 cd firmware && ./build-master.sh        # Rev 9+ (OpenEVSE master); ./build.sh = alte v5.1.5-Basis
-curl -u admin:PASS -F firmware=@out/kinetos-openevse-v5.2.0-dev-kinetos.13.bin http://WALLBOX/update
+curl -u admin:PASS -F firmware=@out/kinetos-openevse-v5.2.0-dev-kinetos.14.bin http://WALLBOX/update
 ```
 
 Danach Web-Login, WLAN und MQTT prüfen (siehe `docs/PAPER.md`, Kap. 6.2).
