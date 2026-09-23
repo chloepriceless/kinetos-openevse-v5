@@ -583,22 +583,24 @@ index 1b50a943..3afb045f 100644
 +  -D KINETOS_EXTRAS
 +  -Wl,--wrap=esp_panic_handler
 diff --git a/src/LedManagerTask.cpp b/src/LedManagerTask.cpp
-index 33f3a774..37bb9504 100644
+index 33f3a774..961455ae 100644
 --- a/src/LedManagerTask.cpp
 +++ b/src/LedManagerTask.cpp
-@@ -29,6 +29,11 @@
+@@ -29,6 +29,13 @@
  #include "debug.h"
  #include "emonesp.h"
  #include "LedManagerTask.h"
 +#ifdef KINETOS_EXTRAS
 +#include "kinetos/kinetos_led.h"
++#include "kinetos/kinetos_extras.h"
++#include "lcd.h"
 +#else
 +#define kinetos_night_brightness(b) (b)
 +#endif
  
  #if defined(NEO_PIXEL_PIN) && defined(NEO_PIXEL_LENGTH) && !defined(ENABLE_WS2812FX)
  #include <Adafruit_NeoPixel.h>
-@@ -315,10 +320,10 @@ unsigned long LedManagerTask::loop(MicroTasks::WakeReason reason)
+@@ -315,17 +322,36 @@ unsigned long LedManagerTask::loop(MicroTasks::WakeReason reason)
        DBUGF("ChargeCurrent: %d ", _evse->getChargeCurrent());
        DBUGF("MaxHWCurrent: %d ", _evse->getMaxHardwareCurrent());
        if (this->brightness == 0){
@@ -611,9 +613,21 @@ index 33f3a774..37bb9504 100644
        }
        switch(state)
        {
-@@ -326,6 +331,13 @@ unsigned long LedManagerTask::loop(MicroTasks::WakeReason reason)
+         case LedState_Evse_State:
            isCharging = _evse->isCharging();
            isError = _evse->isError();
++#if defined(KINETOS_EXTRAS) && defined(ENABLE_WS2812FX)
++          // Kinetos "Light Show": a random WS2812FX effect every 16 s, named on the display.
++          // Errors still show the normal error colour.
++          if(kinetos_lightshow_enabled && !isError)
++          {
++            uint8_t mode = random(1, 72);
++            setAllRGB(col, mode, DEFAULT_FX_SPEED);
++            lcd.display(F("Light Show:"), 0, 0, 0, LCD_CLEAR_LINE);
++            lcd.display(ws2812fx.getModeName(mode), 0, 1, 4000, LCD_CLEAR_LINE);
++            return 16 * 1000;
++          }
++#endif
            if(isCharging){
 +#ifdef KINETOS_EXTRAS
 +            uint8_t fxMode = FX_MODE_COLOR_WIPE;
@@ -625,7 +639,7 @@ index 33f3a774..37bb9504 100644
              setAllRGB(col, FX_MODE_COLOR_WIPE, speed);
            } else if(isError){
              setAllRGB(col, FX_MODE_FADE, DEFAULT_FX_SPEED);
-@@ -333,7 +345,11 @@ unsigned long LedManagerTask::loop(MicroTasks::WakeReason reason)
+@@ -333,7 +359,11 @@ unsigned long LedManagerTask::loop(MicroTasks::WakeReason reason)
              setAllRGB(col, FX_MODE_STATIC, DEFAULT_FX_SPEED);
            }    
            //DBUGF("MODE:  LedState_Evse_State\n");
@@ -1409,6 +1423,100 @@ index 6071ebfa..a7bc3f5e 100644
    doc["max_current"] = evse.getMaxCurrent();
    if(evse.isTemperatureValid(EVSE_MONITOR_TEMP_MONITOR)) {
      doc["temp"] = evse.getTemperature(EVSE_MONITOR_TEMP_MONITOR) * TEMP_SCALE_FACTOR;
+diff --git a/src/kinetos/kinetos_budget.cpp b/src/kinetos/kinetos_budget.cpp
+new file mode 100644
+index 00000000..c54c7b46
+--- /dev/null
++++ b/src/kinetos/kinetos_budget.cpp
+@@ -0,0 +1,55 @@
++#ifdef KINETOS_EXTRAS
++
++#include "kinetos_budget.h"
++#include "app_config.h"
++#include "event.h"
++
++String kinetos_mqtt_ls_budget;
++
++static double s_budget = -1;
++static uint32_t s_received = 0;
++
++static bool budget_live()
++{
++  return s_budget >= 0 && millis() - s_received < KINETOS_BUDGET_TIMEOUT;
++}
++
++bool kinetos_budget_set(const String &payload)
++{
++  char *end = NULL;
++  double amps = strtod(payload.c_str(), &end);
++  if(end == payload.c_str() || amps < 0 || isnan(amps)) {
++    return false;
++  }
++  bool wasLive = budget_live();
++  s_budget = amps;
++  s_received = millis();
++
++  if(!wasLive) {
++    StaticJsonDocument<64> event;
++    event["loadsharing_budget_live"] = true;
++    event_send(event);
++  }
++  return true;
++}
++
++double kinetos_budget_effective()
++{
++  double fixed = loadsharing_group_max_current;
++  if(!budget_live()) {
++    return fixed;
++  }
++  return (fixed > 0 && fixed < s_budget) ? fixed : s_budget;
++}
++
++void kinetos_budget_status(JsonDocument &doc)
++{
++  bool live = budget_live();
++  doc["loadsharing_budget_live"] = live;
++  doc["loadsharing_budget"] = kinetos_budget_effective();
++  if(s_budget >= 0) {
++    doc["loadsharing_budget_age"] = (millis() - s_received) / 1000;
++  }
++}
++
++#endif // KINETOS_EXTRAS
+diff --git a/src/kinetos/kinetos_budget.h b/src/kinetos/kinetos_budget.h
+new file mode 100644
+index 00000000..a81f1827
+--- /dev/null
++++ b/src/kinetos/kinetos_budget.h
+@@ -0,0 +1,27 @@
++// Live group budget for load sharing: an energy manager or a grid meter script publishes the
++// current the whole group may draw right now (A). The controller then shares
++// min(live budget, loadsharing_group_max_current) instead of the fixed value.
++// Topics: "<mqtt_topic>/loadsharing/budget/set" and, if set, config "mqtt_ls_budget".
++// No update for KINETOS_BUDGET_TIMEOUT -> back to the fixed loadsharing_group_max_current.
++#ifndef KINETOS_BUDGET_H
++#define KINETOS_BUDGET_H
++
++#ifdef KINETOS_EXTRAS
++
++#include <Arduino.h>
++#include <ArduinoJson.h>
++
++#define KINETOS_BUDGET_TIMEOUT (120UL * 1000UL)
++
++extern String kinetos_mqtt_ls_budget;
++
++// Returns false if the payload is not a number >= 0
++bool kinetos_budget_set(const String &payload);
++
++// Budget to share now (A)
++double kinetos_budget_effective();
++
++void kinetos_budget_status(JsonDocument &doc);
++
++#endif // KINETOS_EXTRAS
++#endif // KINETOS_BUDGET_H
 diff --git a/src/kinetos/kinetos_crash.cpp b/src/kinetos/kinetos_crash.cpp
 new file mode 100644
 index 00000000..34cbd321
@@ -1514,10 +1622,10 @@ index 00000000..ad62e13a
 +#endif // KINETOS_CRASH_H
 diff --git a/src/kinetos/kinetos_extras.cpp b/src/kinetos/kinetos_extras.cpp
 new file mode 100644
-index 00000000..0662341b
+index 00000000..7ed060d3
 --- /dev/null
 +++ b/src/kinetos/kinetos_extras.cpp
-@@ -0,0 +1,199 @@
+@@ -0,0 +1,202 @@
 +#ifdef KINETOS_EXTRAS
 +
 +#include <esp_system.h>
@@ -1527,6 +1635,7 @@ index 00000000..0662341b
 +#include "kinetos_led.h"
 +#include "app_config.h"
 +#include "grid_dimming.h"
++#include "kinetos_budget.h"
 +#include "sdm_meter.h"
 +#include "input.h"
 +#include "evse_man.h"
@@ -1539,6 +1648,7 @@ index 00000000..0662341b
 +uint8_t kinetos_led_fx_charge;
 +bool kinetos_ha_enabled;
 +String kinetos_lcd_splash;
++bool kinetos_lightshow_enabled;
 +uint8_t kinetos_config_ver;
 +uint8_t kinetos_legacy_p14a_pin;
 +uint32_t kinetos_legacy_p14a_limit;
@@ -1689,6 +1799,7 @@ index 00000000..0662341b
 +  doc["pv_share"] = kinetos_pv_share();
 +  doc["powersum"] = doc["power"]; // name used by the Kinetos firmware
 +  doc["controller_meter_feed"] = controllerFeed.isEnabled();
++  kinetos_budget_status(doc);
 +  doc["gpio14"] = digitalRead(14);
 +  doc["gpio15"] = digitalRead(15);
 +  doc["gpio39"] = digitalRead(39);
@@ -1719,10 +1830,10 @@ index 00000000..0662341b
 +#endif // KINETOS_EXTRAS
 diff --git a/src/kinetos/kinetos_extras.h b/src/kinetos/kinetos_extras.h
 new file mode 100644
-index 00000000..0ad89224
+index 00000000..2fdb5ea5
 --- /dev/null
 +++ b/src/kinetos/kinetos_extras.h
-@@ -0,0 +1,45 @@
+@@ -0,0 +1,49 @@
 +// Kinetos OpenEVSE V5 extras on top of the upstream firmware and the Kinetos board support
 +// (SDM meter, grid dimming, Modbus TCP): PV share on the LED ring, Home Assistant discovery,
 +// panic trap and the migration of settings written by Kinetos V5 up to rev 8 (v5.1.5 based).
@@ -1738,6 +1849,8 @@ index 00000000..0ad89224
 +extern uint8_t kinetos_led_fx_charge;
 +extern bool kinetos_ha_enabled;
 +extern String kinetos_lcd_splash;
++extern bool kinetos_lightshow_enabled;
++extern String kinetos_mqtt_ls_budget;
 +extern uint8_t kinetos_config_ver;
 +extern uint8_t kinetos_legacy_p14a_pin;
 +extern uint32_t kinetos_legacy_p14a_limit;
@@ -1750,6 +1863,8 @@ index 00000000..0ad89224
 +  new ConfigOptDefinition<uint8_t>(kinetos_led_fx_charge, 3, "led_fx_charge", "lfx"), \
 +  new ConfigOptDefinition<bool>(kinetos_ha_enabled, true, "ha_discovery_enabled", "had"), \
 +  new ConfigOptDefinition<String>(kinetos_lcd_splash, "Kinetos ETH/WiFi", "lcd_splash", "lsp"), \
++  new ConfigOptDefinition<bool>(kinetos_lightshow_enabled, false, "lightshow_enabled", "lsh"), \
++  new ConfigOptDefinition<String>(kinetos_mqtt_ls_budget, "", "mqtt_ls_budget", "mlb"), \
 +  new ConfigOptDefinition<uint8_t>(kinetos_config_ver, 0, "kinetos_config_ver", "kcv"), \
 +  new ConfigOptDefinition<uint8_t>(kinetos_legacy_p14a_pin, 14, "kinetos_legacy_p14a_pin", "p4p"), \
 +  new ConfigOptDefinition<uint32_t>(kinetos_legacy_p14a_limit, 4200, "kinetos_legacy_p14a_limit", "p4l"), \
@@ -2203,6 +2318,41 @@ index 3308954d..4a014fda 100644
      case EvseClient_OpenEnergyMonitor_DemandShaper:return "demand shaper";
      default:                                       return "claim";
    }
+diff --git a/src/loadsharing_peer_poller.cpp b/src/loadsharing_peer_poller.cpp
+index 3aaa095f..1d4e02dd 100644
+--- a/src/loadsharing_peer_poller.cpp
++++ b/src/loadsharing_peer_poller.cpp
+@@ -11,6 +11,12 @@
+ 
+ #include "debug.h"
+ #include "loadsharing_peer_poller.h"
++#ifdef KINETOS_EXTRAS
++#include "kinetos/kinetos_budget.h"
++#define LS_GROUP_MAX_CURRENT kinetos_budget_effective()
++#else
++#define LS_GROUP_MAX_CURRENT loadsharing_group_max_current
++#endif
+ #include "loadsharing_algorithm.h"
+ #include "app_config.h"
+ #include "current_shaper.h"
+@@ -74,7 +80,7 @@ unsigned long LoadSharingPeerPoller::loop(MicroTasks::WakeReason reason) {
+   if (_groupState) {
+     _groupState->setEnabled(loadsharing_enabled);
+     _groupState->setGroupId(loadsharing_group_id);
+-    _groupState->setGroupMaxCurrent(loadsharing_group_max_current);
++    _groupState->setGroupMaxCurrent(LS_GROUP_MAX_CURRENT);
+     _groupState->setSafetyFactor(loadsharing_safety_factor);
+   }
+ 
+@@ -1049,7 +1055,7 @@ void LoadSharingPeerPoller::recomputeAndPushAllocations() {
+   bool failsafe_active = false;
+   std::vector<LoadSharingAllocation> allocations = computeAllocations(
+     inputs,
+-    loadsharing_group_max_current,
++    LS_GROUP_MAX_CURRENT,
+     loadsharing_safety_factor,
+     loadsharing_failsafe_peer_assumed_current,
+     loadsharing_failsafe_safe_current,
 diff --git a/src/main.cpp b/src/main.cpp
 index 5f007bf5..209a5aa8 100644
 --- a/src/main.cpp
@@ -3032,10 +3182,10 @@ index 00000000..04f9d21a
 +
 +#endif // _OPENEVSE_MODBUS_TCP_PROTOCOL_H
 diff --git a/src/mqtt.cpp b/src/mqtt.cpp
-index 5e66d75e..39cb3d80 100644
+index 5e66d75e..9b4b950c 100644
 --- a/src/mqtt.cpp
 +++ b/src/mqtt.cpp
-@@ -18,6 +18,12 @@
+@@ -18,6 +18,13 @@
  #include "manual.h"
  #include "scheduler.h"
  #include "current_shaper.h"
@@ -3043,12 +3193,13 @@ index 5e66d75e..39cb3d80 100644
 +#ifdef KINETOS_EXTRAS
 +#include "kinetos/kinetos_ha.h"
 +#include "kinetos/kinetos_led.h"
++#include "kinetos/kinetos_budget.h"
 +#endif
 +#include "grid_dimming_calc.h"
  #include "home_battery.h"
  
  Mqtt mqtt(evse); // global instance
-@@ -272,6 +278,12 @@ void Mqtt::onMqttConnect() {
+@@ -272,6 +279,12 @@ void Mqtt::onMqttConnect() {
    event_send(doc);
  
    subscribeTopics();
@@ -3061,15 +3212,19 @@ index 5e66d75e..39cb3d80 100644
    publishInitialState();
  }
  
-@@ -342,6 +354,7 @@ void Mqtt::subscribeTopics() {
+@@ -342,6 +355,11 @@ void Mqtt::subscribeTopics() {
    // Settable topics
    _mqttclient.subscribe(mqtt_topic + "/divertmode/set"); yield();
    _mqttclient.subscribe(mqtt_topic + "/shaper/set"); yield();
 +  _mqttclient.subscribe(mqtt_topic + "/dimming/set"); yield();
++#ifdef KINETOS_EXTRAS
++  _mqttclient.subscribe(mqtt_topic + "/loadsharing/budget/set"); yield();
++  if (kinetos_mqtt_ls_budget != "") { _mqttclient.subscribe(kinetos_mqtt_ls_budget); yield(); }
++#endif
    _mqttclient.subscribe(mqtt_topic + "/override/set"); yield();
    _mqttclient.subscribe(mqtt_topic + "/claim/set"); yield();
    _mqttclient.subscribe(mqtt_topic + "/schedule/set"); yield();
-@@ -447,6 +460,9 @@ void Mqtt::handleMqttMessage(MongooseString topic, MongooseString payload) {
+@@ -447,6 +465,9 @@ void Mqtt::handleMqttMessage(MongooseString topic, MongooseString payload) {
    if (topic_string == mqtt_solar){
      int solar = payload_str.toInt();
      divert.setSolar(solar);
@@ -3079,7 +3234,7 @@ index 5e66d75e..39cb3d80 100644
      DBUGF("solar:%dW", solar);
      divert.update_state();
      if (shaper.getState()) {
-@@ -456,6 +472,9 @@ void Mqtt::handleMqttMessage(MongooseString topic, MongooseString payload) {
+@@ -456,6 +477,9 @@ void Mqtt::handleMqttMessage(MongooseString topic, MongooseString payload) {
    else if (topic_string == mqtt_grid_ie) {
      int grid_ie = payload_str.toInt();
      divert.setGridIe(grid_ie);
@@ -3089,7 +3244,7 @@ index 5e66d75e..39cb3d80 100644
      DBUGF("grid:%dW", grid_ie);
      divert.update_state();
      if (mqtt_live_pwr == mqtt_grid_ie) {
-@@ -483,6 +502,12 @@ void Mqtt::handleMqttMessage(MongooseString topic, MongooseString payload) {
+@@ -483,6 +507,12 @@ void Mqtt::handleMqttMessage(MongooseString topic, MongooseString payload) {
    }
    else if (topic_string == mqtt_vehicle_eta && vehicle_data_src == VEHICLE_DATA_SRC_MQTT) {
      int vehicle_eta = payload_str.toInt();
@@ -3102,7 +3257,22 @@ index 5e66d75e..39cb3d80 100644
      _evse->setVehicleEta(vehicle_eta);
      StaticJsonDocument<128> event; event["time_to_full_charge"] = vehicle_eta; event_send(event);
    }
-@@ -513,6 +538,12 @@ void Mqtt::handleMqttMessage(MongooseString topic, MongooseString payload) {
+@@ -493,6 +523,14 @@ void Mqtt::handleMqttMessage(MongooseString topic, MongooseString payload) {
+   }
+   // Home/powerwall battery is display-only with no source arbitration (mirrors its
+   // POST /status path), so it is gated only on the topic being configured.
++#ifdef KINETOS_EXTRAS
++  else if (topic_string == mqtt_topic + "/loadsharing/budget/set" ||
++           (kinetos_mqtt_ls_budget != "" && topic_string == kinetos_mqtt_ls_budget)) {
++    if (!kinetos_budget_set(payload_str)) {
++      DBUGLN("MQTT loadsharing budget rejected");
++    }
++  }
++#endif
+   else if (mqtt_home_battery_soc != "" && topic_string == mqtt_home_battery_soc) {
+     int soc = payload_str.toInt();
+     home_battery_set_soc(soc);
+@@ -513,6 +551,12 @@ void Mqtt::handleMqttMessage(MongooseString topic, MongooseString payload) {
      byte newshaper = payload_str.toInt();
      if (newshaper==0) shaper.setState(false); else if (newshaper==1) shaper.setState(true);
    }
