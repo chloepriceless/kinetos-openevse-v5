@@ -23,7 +23,7 @@ smart1®-Modbus-TCP, §14a EnWG, Load Sharing, Home Assistant, WLED und TeslaMat
 |---|---|
 | [`docs/PAPER.md`](docs/PAPER.md) | Vollständiger Bericht: Ausgangslage, Hardware, Backup ohne Löten, Analyse, neue Firmware, Stolpersteine |
 | [`docs/SPECS.md`](docs/SPECS.md) | Technische Referenz: Pinbelegung, Flash-Layout, MID-Zähler, smart1-Registerkarte, Konfiguration, Schnittstellen |
-| [`firmware/`](firmware/) | Kinetos-Schicht (`kinetos/`), Patch für OpenEVSE v5.1.5 (`patches/`), GUI-Erweiterung (`gui/`), `build.sh` |
+| [`firmware/`](firmware/) | Patches für OpenEVSE-master (`patches-master/`, gebaut mit `build-master.sh`); alt: Kinetos-Schicht (`kinetos/`), Patch für v5.1.5 (`patches/`), GUI (`gui/`), `build.sh` |
 | [`dumper/`](dumper/) | OTA-Dumper: sichert den kompletten Flash über LAN und schaltet danach zurück |
 | [`tools/re/`](tools/re/) | Analyse-Werkzeuge (ESP-Image → ELF, Literal-Pool-Suche, Ghidra-Skripte) |
 | [`tools/modbus/`](tools/modbus/) | smart1-Modbus-TCP lesen/scannen |
@@ -36,8 +36,9 @@ jeder sein eigenes Gerät.
 - Ab Rev 9 (`v5.2.0-dev-kinetos.9`) auf Basis des aktuellen OpenEVSE-master: neue Oberfläche, Load Sharing,
   Hinweise aus den Fehlerzählern des Controllers; Einstellungen von Rev ≤ 8 werden beim ersten Start übernommen
 - LAN (LAN8720) und WLAN, aktuelle OpenEVSE-v5-API mit Claims (evcc ≥ 4.1.9 kompatibel), OCPP 1.6, MQTT
-- MID-Zähler (SDM630-Registerkarte, Modbus RTU): Strom, Spannung, Leistung pro Phase, Zählerstand;
-  Leistung und Energiezählung kommen aus dem Zähler statt aus der Schätzung `V × A × 3`
+- MID-Zähler (Modbus RTU): Strom, Spannung, Leistung pro Phase, Zählerstand; Leistung und Energiezählung
+  kommen aus dem Zähler statt aus der Schätzung `V × A × 3`. Ab Rev 20 werden beide verbauten Zählertypen
+  erkannt (SDM630-kompatibel und DTS4921) samt Parität 8N1/8E1, siehe unten
 - smart1®-kompatibler Modbus-TCP-Server (Port 502) mit der Kinetos-Registerkarte
 - §14a EnWG: Dimmung auf 4,2 kW per Klemme (Steuerbox), MQTT oder HTTP, Vorrang vor allen anderen Vorgaben
 - Home-Assistant-MQTT-Discovery (23 Entitäten)
@@ -60,6 +61,41 @@ jeder sein eigenes Gerät.
 - Einstellungen werden zusätzlich im Dateisystem gesichert und bei einem Ladefehler automatisch wiederhergestellt
 - Migration von Einstellungen der Original-Kinetos-Firmware und älterer Revisionen
 
+## Zählervarianten (ab Rev 20)
+
+In Kinetos-Boxen stecken zwei verschiedene MID-Zähler:
+
+| Zähler | Registerkarte | Format | Werkseinstellung |
+|---|---|---|---|
+| SDM630-kompatibel (Eastron-Karte) | 0x0000 ff. | IEEE-754-Float | 9600 Baud, 8N1 |
+| DTS4921 | 0x0100 ff. (eigene Karte) | uint32/int32, feste Skalierung | Adresse 1, 9600 Baud, **8E1** |
+
+Bis Rev 18 las die Firmware nur die SDM630-Karte; ein DTS4921 lieferte damit Unsinn
+(z. B. `voltage: 1.6e-33`, Issue #4). Jetzt erkennt der Treiber den Zähler beim Start und nach
+10 s ohne Antwort neu:
+
+1. L1-Spannung mit der SDM630-Karte lesen, dann mit der DTS4921-Karte. Die erste Karte, die
+   100–300 V liefert, bleibt. Ein unplausibler Wert oder eine Modbus-Fehlerantwort heißt: andere Karte.
+2. Antwortet der Zähler dreimal nicht (Timeout oder CRC-Fehler), wird die andere Parität probiert
+   (8N1 ↔ 8E1). Die zuletzt funktionierende Einstellung kommt beim nächsten Mal zuerst.
+3. `/status` zeigt `meter_type` (`sdm630`, `dts4921`, `unknown`) und `meter_serial` (`8N1`, `8E1`).
+   Alle anderen Felder und Einheiten bleiben gleich.
+
+Die Firmware **schreibt nie** in den Zähler. Beim DTS4921 setzt ein Schreibzugriff auf 0x0020 den
+Zählerstand auf null, 0x0061–0x0063 ändern Adresse, Baudrate und Parität. Register: `docs/SPECS.md`, Kap. 5.
+
+Stand: Die SDM630-Erkennung ist der bisherige Weg. Der DTS4921-Weg ist gegen die Herstellerdoku
+geprüft (Host-Test mit deren Beispielantwort, 238,1 V), aber noch nicht an einem echten DTS4921 –
+Rückmeldungen mit `meter_type`, `meter_serial` und `meter_errors` sind willkommen.
+
+## EEBUS-Image (ab Rev 19, noch nicht auf einer Box getestet)
+
+`build-master.sh` baut zwei Images aus denselben Quellen, weil OCPP und EEBUS nicht zusammen in die 4 MB passen:
+`kinetos-v5-<version>.bin` (mit OCPP) und `kinetos-eebus-v5-<version>.bin` (EEBUS statt OCPP). EEBUS
+(openeebus von NIBE): Wallbox als steuerbare Verbrauchseinrichtung (LPC, §14a-Grenze in Watt von Steuerbox
+oder Energiemanager) und Messstelle (MPC); Einstellungen unter Settings → EEBUS. Die Update-Prüfung wählt
+das Release-Asset nach dem Image-Typ.
+
 ## Schnellstart
 
 ```bash
@@ -73,9 +109,9 @@ curl http://WALLBOX/revert                            # zurück auf Kinetos
 curl -u admin:PASS http://WALLBOX/config -o config-before.json
 
 # 3. Firmware flashen: fertige Datei von der Releases-Seite …
-curl -u admin:PASS -F firmware=@kinetos-v5-v5.2.0-dev-kinetos.18.bin http://WALLBOX/update
+curl -u admin:PASS -F firmware=@kinetos-v5-<version>.bin http://WALLBOX/update
 #    … oder selbst bauen (PlatformIO + Node.js)
-cd firmware && ./build-master.sh        # Ergebnis: out/kinetos-v5-<version>.bin
+cd firmware && ./build-master.sh        # Ergebnis: out/kinetos-v5-<version>.bin, out/kinetos-eebus-v5-<version>.bin
 ```
 
 Danach Web-Login, WLAN und MQTT prüfen (siehe `docs/PAPER.md`, Kap. 6.2). Spätere Updates bietet
@@ -86,8 +122,8 @@ Zurück zur Original-Firmware: das eigene gesicherte `app0`-Image über `/update
 
 - Eingriffe in eine Ladestation erfolgen auf eigene Verantwortung. Die Sicherheitsfunktionen
   (RCM, GFCI, Relais-Prüfung) liegen im Controller und werden nicht verändert.
-- Getestet mit genau einer Box (MID-Variante, Controller 8.2.0.PR). Andere Varianten
-  (z. B. „AUEM“ mit zwei Platinen) haben andere Pins.
+- Getestet mit genau einer Box (MID-Variante mit SDM630-kompatiblem Zähler, Controller 8.2.0.PR).
+  Andere Varianten (z. B. „AUEM“ mit zwei Platinen) haben andere Pins.
 - Der Flash-Dump enthält WLAN-, MQTT- und Web-Passwörter im Klartext – nicht weitergeben.
 
 ## Lizenz

@@ -1,0 +1,781 @@
+diff --git a/docs/developer/building.md b/docs/developer/building.md
+index 642f719e..e50b9d3f 100644
+--- a/docs/developer/building.md
++++ b/docs/developer/building.md
+@@ -210,15 +210,37 @@ pip install -r requirements.txt
+ pytest -v
+ ```
+ 
+-### SDM630 energy meter (`ENABLE_SDM_METER`)
++### SDM630 / DTS4921 energy meter (`ENABLE_SDM_METER`)
+ 
+-Boards with an Eastron SDM630 / SDM72D-M (or compatible) meter on RS485 can read it over
++Boards with an Eastron SDM630 / SDM72D-M (or compatible) or a DTS4921 meter on RS485 can read it over
+ Modbus RTU. Build flags: `ENABLE_SDM_METER`, `SDM_METER_SERIAL` (default `Serial2`),
+ `SDM_METER_RX`, `SDM_METER_TX`, `SDM_METER_BAUD` (9600), `SDM_METER_ADDRESS` (1). The RS485
+ transceiver must switch direction by itself. When the meter answers, `/status` reports its
+ values: `amp`/`voltage` (L1), `power` (total), `amp2`, `amp3`, `voltage2`, `voltage3`,
+-`phases` (phases above 1 A), `meter_import_kwh`, `meter_valid`, `meter_present`, `meter_errors`, and the session
+-energy is integrated from the measured total power. If the meter does not answer for 30 s
+-(box sold without meter), `meter_present` turns `false`, the controller values are used and the
+-meter is only probed once a minute. `DEBUG_PORT_NULL` sends debug output only to
++`phases` (phases above 1 A), `meter_import_kwh`, `meter_valid`, `meter_present`, `meter_errors`,
++`meter_type` and `meter_serial`, and the session energy is integrated from the measured total power.
++If the meter does not answer for 30 s (box sold without meter), `meter_present` turns `false`, the
++controller values are used and the meter is only probed once a minute.
++
++The register map and the serial setting are detected at start and whenever the meter has not
++answered for 10 s. The driver reads L1 voltage with the SDM630 map first (input registers, IEEE-754
++float) and then with the native DTS4921 map; the first one that gives 100–300 V is kept and shown as
++`meter_type` (`sdm630` or `dts4921`, `unknown` before the first success). A wrong map answers with
++valid frames but nonsense (an integer read as float is close to 0 V) or with a Modbus exception.
++If the meter does not answer three times in a row (timeout or bad CRC), the other parity is tried:
++8N1 and 8E1 (`meter_serial`). The DTS4921 ships with address 1, 9600 baud, 8E1. The last working
++setting is tried first on the next detection. All values keep their units (V, A, W, kWh).
++
++| Value | SDM630 (float) | DTS4921 (32 bit, high word first) |
++| --- | --- | --- |
++| Voltage L1-L3 | 0x0000/02/04 | 0x0100/02/04, uint32, 0.1 V |
++| Current L1-L3 | 0x0006/08/0A | 0x0106/08/0A, uint32, 0.001 A |
++| Power L1-L3 | 0x000C/0E/10 | 0x0110/12/14, int32, 0.1 W |
++| Total power | 0x0034 | 0x010E, int32, 0.1 W |
++| Import energy | 0x0048 | 0x0027, uint32, 0.01 kWh |
++| Total energy | 0x0156 | 0x001D, uint32, 0.01 kWh |
++
++Both maps are read with function 0x04. The driver never writes to the meter (on the DTS4921 a
++write to 0x0020 clears the energy counters, 0x0061–0x0063 change address, baud rate and parity).
++Framing, CRC and decoding are host-tested in `test/test_sdm_meter_proto`. `DEBUG_PORT_NULL` sends debug output only to
+ the web console, for boards where UART0 is the RAPI link.
+diff --git a/platformio.ini b/platformio.ini
+index b1844180..f25904b9 100644
+--- a/platformio.ini
++++ b/platformio.ini
+@@ -722,7 +722,7 @@ platform = native
+ framework =
+ test_framework = doctest
+ test_build_src = true
+-build_src_filter = -<*> +<tsdb_sample.cpp> +<home_battery.cpp> +<lvgl_tft/backlight.cpp> +<loadsharing_algorithm.cpp> +<crypto/sha256.c> +<crypto/hmac_sha256.cpp> +<web_auth.cpp> +<ota_url_allow.cpp> +<http_etag.cpp> +<fault_text.cpp> +<charge_threshold.cpp> +<notifications_rules.cpp> +<notifications_acks.cpp> +<grid_dimming_calc.cpp> +<modbus_tcp_protocol.cpp>
++build_src_filter = -<*> +<tsdb_sample.cpp> +<home_battery.cpp> +<lvgl_tft/backlight.cpp> +<loadsharing_algorithm.cpp> +<crypto/sha256.c> +<crypto/hmac_sha256.cpp> +<web_auth.cpp> +<ota_url_allow.cpp> +<http_etag.cpp> +<fault_text.cpp> +<charge_threshold.cpp> +<notifications_rules.cpp> +<notifications_acks.cpp> +<grid_dimming_calc.cpp> +<modbus_tcp_protocol.cpp> +<sdm_meter_proto.cpp>
+ build_flags =
+   -std=gnu++17
+   -I src/lvgl_tft
+diff --git a/src/input.cpp b/src/input.cpp
+index a7bc3f5e..987f609f 100644
+--- a/src/input.cpp
++++ b/src/input.cpp
+@@ -131,6 +131,8 @@ void create_rapi_json(JsonDocument &doc)
+   doc["meter_valid"] = sdmMeter.isValid();
+   doc["meter_present"] = sdmMeter.isPresent();
+   doc["meter_errors"] = sdmMeter.getErrors();
++  doc["meter_type"] = sdmMeter.getType();
++  doc["meter_serial"] = sdmMeter.getSerialConfig();
+ #ifdef KINETOS_EXTRAS
+   kinetos_status(doc);
+ #endif
+diff --git a/src/sdm_meter.cpp b/src/sdm_meter.cpp
+index b2be8c34..a2f76ecd 100644
+--- a/src/sdm_meter.cpp
++++ b/src/sdm_meter.cpp
+@@ -12,18 +12,14 @@
+ #define SDM_METER_GAP         20    // ms between requests
+ #define SDM_METER_VALID_AGE   10000 // ms a value stays valid
+ #define SDM_METER_PUBLISH     10000 // ms between MQTT/websocket updates
++#define SDM_METER_LOST_AFTER  10000 // ms without any answer -> detect the meter again
+ #define SDM_METER_ABSENT_AFTER 30000 // ms without any answer -> no meter fitted
+ #define SDM_METER_PROBE       60000 // ms between probes while absent
++#define SDM_METER_DETECT_TRIES 3    // failed requests before the other serial setting is tried
++#define SDM_METER_RETRY       10000 // ms between detection rounds while the meter answers but
++                                    // no map gives a plausible voltage
+ 
+-// SDM630 input registers (FC 0x04, IEEE-754 float, big-endian)
+-const uint16_t SdmMeter::_registers[SdmMeter::ValueCount] = {
+-  0x0000, 0x0002, 0x0004, // voltage L1-L3
+-  0x0006, 0x0008, 0x000A, // current L1-L3
+-  0x000C, 0x000E, 0x0010, // active power L1-L3
+-  0x0034,                 // total system power
+-  0x0048,                 // import active energy kWh
+-  0x0156                  // total active energy kWh
+-};
++static_assert((int)SdmMeter::ValueCount == (int)SDM_Q_COUNT, "SdmMeter::Value and SdmMeterQuantity differ");
+ 
+ SdmMeter::SdmMeter() :
+   MicroTasks::Task(),
+@@ -36,7 +32,17 @@ SdmMeter::SdmMeter() :
+   _absent(false),
+   _requests(0),
+   _responses(0),
+-  _errors(0)
++  _errors(0),
++  _card(SDM_CARD_SDM630),
++  _goodCard(SDM_CARD_SDM630),
++  _serial(Serial8N1),
++  _goodSerial(Serial8N1),
++  _detected(false),
++  _detecting(true),
++  _answered(false),
++  _fails(0),
++  _cardsTried(0),
++  _serialsTried(0)
+ {
+   for(int i = 0; i < ValueCount; i++) {
+     _values[i] = 0;
+@@ -53,33 +59,26 @@ void SdmMeter::setup()
+ {
+   _lastResponse = millis();
+   SDM_METER_SERIAL.begin(SDM_METER_BAUD, SERIAL_8N1, SDM_METER_RX, SDM_METER_TX);
++  _serial = Serial8N1;
++  startDetection();
+ }
+ 
+-uint16_t SdmMeter::crc16(const uint8_t *data, size_t len)
++void SdmMeter::openSerial(SerialConfig serial)
+ {
+-  uint16_t crc = 0xFFFF;
+-  for(size_t i = 0; i < len; i++)
+-  {
+-    crc ^= data[i];
+-    for(int b = 0; b < 8; b++) {
+-      crc = (crc & 1) ? (crc >> 1) ^ 0xA001 : crc >> 1;
+-    }
++  if(serial == _serial) {
++    return;
+   }
+-  return crc;
++  DBUGF("SdmMeter: serial %s", Serial8E1 == serial ? "8E1" : "8N1");
++  SDM_METER_SERIAL.end();
++  SDM_METER_SERIAL.begin(SDM_METER_BAUD, Serial8E1 == serial ? SERIAL_8E1 : SERIAL_8N1, SDM_METER_RX, SDM_METER_TX);
++  _serial = serial;
+ }
+ 
+ void SdmMeter::sendRequest()
+ {
+-  uint16_t reg = _registers[_index];
+-  uint8_t req[8] = {
+-    SDM_METER_ADDRESS, 0x04,
+-    (uint8_t)(reg >> 8), (uint8_t)(reg & 0xFF),
+-    0x00, 0x02,
+-    0, 0
+-  };
+-  uint16_t crc = crc16(req, 6);
+-  req[6] = crc & 0xFF;
+-  req[7] = crc >> 8;
++  uint16_t reg = sdm_meter_register(_card, (SdmMeterQuantity)(_detecting ? VoltageL1 : _index));
++  uint8_t req[SDM_METER_REQUEST_LEN];
++  sdm_meter_build_request(req, SDM_METER_ADDRESS, reg);
+ 
+   while(SDM_METER_SERIAL.available()) {
+     SDM_METER_SERIAL.read();
+@@ -91,57 +90,155 @@ void SdmMeter::sendRequest()
+   _requests++;
+ }
+ 
+-// Response: slave, 0x04, 0x04, 4 data bytes (big-endian float), CRC lo, CRC hi
+-bool SdmMeter::handleResponse()
++// Response: slave, 0x04, 0x04, 4 data bytes (big-endian), CRC lo, CRC hi;
++// exception: slave, 0x84, code, CRC lo, CRC hi
++SdmMeterFrame SdmMeter::receive(uint32_t &raw)
+ {
+-  while(SDM_METER_SERIAL.available() && _rxLen < sizeof(_rx)) {
++  while(SDM_METER_SERIAL.available() && _rxLen < sdm_meter_expected_length(_rx, _rxLen)) {
+     _rx[_rxLen++] = SDM_METER_SERIAL.read();
+   }
+-  if(_rxLen < sizeof(_rx)) {
+-    return false;
+-  }
++  return sdm_meter_parse(_rx, _rxLen, SDM_METER_ADDRESS, raw);
++}
+ 
+-  uint16_t crc = crc16(_rx, 7);
+-  if(_rx[0] != SDM_METER_ADDRESS || _rx[1] != 0x04 || _rx[2] != 0x04 ||
+-     _rx[7] != (crc & 0xFF) || _rx[8] != (crc >> 8))
++// Detection: try the last working setting first, SDM630 before DTS4921 on a fresh start
++void SdmMeter::startDetection()
++{
++  DBUGLN("SdmMeter: detecting meter");
++  _detecting = true;
++  _answered = false;
++  _fails = 0;
++  _cardsTried = 0;
++  _serialsTried = 0;
++  _card = _goodCard;
++  openSerial(_goodSerial);
++}
++
++unsigned long SdmMeter::detectStep(SdmMeterFrame frame, uint32_t raw)
++{
++  float volts = 0;
++  switch(frame)
+   {
+-    DBUGF("SdmMeter: bad response for reg 0x%04x", _registers[_index]);
+-    _errors++;
+-    return true;
++    case SDM_FRAME_OK:
++      _lastResponse = millis();
++      _absent = false;
++      _answered = true;
++      if(sdm_meter_decode(_card, (SdmMeterQuantity)VoltageL1, raw, volts) && sdm_meter_voltage_plausible(volts))
++      {
++        DBUGF("SdmMeter: %s at %s, L1 %.1f V", sdm_meter_card_name(_card), getSerialConfig(), volts);
++        if(_card != _goodCard) {
++          for(int i = 0; i < ValueCount; i++) {
++            _updated[i] = 0;
++          }
++        }
++        _goodCard = _card;
++        _goodSerial = _serial;
++        _detected = true;
++        _detecting = false;
++        _responses++;
++        _values[VoltageL1] = volts;
++        _updated[VoltageL1] = millis();
++        _index = 0;
++        return SDM_METER_GAP;
++      }
++      DBUGF("SdmMeter: %s map gives L1 %g V, not plausible", sdm_meter_card_name(_card), volts);
++      return nextCard();
++
++    case SDM_FRAME_EXCEPTION:
++      // The meter talks at this serial setting, but does not know the register
++      _lastResponse = millis();
++      _absent = false;
++      _answered = true;
++      _errors++;
++      return nextCard();
++
++    default:
++      // Timeout or broken frame: wrong parity looks like this
++      _errors++;
++      if(++_fails < SDM_METER_DETECT_TRIES) {
++        return SDM_METER_GAP;
++      }
++      return nextSerial();
+   }
++}
+ 
+-  uint32_t raw = ((uint32_t)_rx[3] << 24) | ((uint32_t)_rx[4] << 16) | ((uint32_t)_rx[5] << 8) | _rx[6];
+-  float value;
+-  memcpy(&value, &raw, sizeof(value));
+-  if(!isnan(value)) {
+-    _values[_index] = value;
+-    _updated[_index] = millis();
+-    _responses++;
+-    _lastResponse = millis();
+-    _absent = false;
++unsigned long SdmMeter::nextCard()
++{
++  _fails = 0;
++  if(++_cardsTried >= SDM_CARD_COUNT) {
++    return roundFailed();
++  }
++  _card = (SdmMeterCard)((_card + 1) % SDM_CARD_COUNT);
++  return SDM_METER_GAP;
++}
++
++unsigned long SdmMeter::nextSerial()
++{
++  _fails = 0;
++  if(_answered || ++_serialsTried >= 2) {
++    // A meter that answered at this setting does not need the other parity
++    return roundFailed();
++  }
++  _cardsTried = 0;
++  _card = _goodCard;
++  openSerial(Serial8E1 == _serial ? Serial8N1 : Serial8E1);
++  return SDM_METER_GAP;
++}
++
++unsigned long SdmMeter::roundFailed()
++{
++  bool answered = _answered;
++  checkAbsent();
++  startDetection();
++  if(_absent) {
++    return SDM_METER_PROBE;
++  }
++  return answered ? SDM_METER_RETRY : SDM_METER_GAP;
++}
++
++void SdmMeter::checkAbsent()
++{
++  if(!_absent && millis() - _lastResponse >= SDM_METER_ABSENT_AFTER) {
++    DBUGLN("SdmMeter: no answer, assuming no meter fitted");
++    _absent = true;
+   }
+-  return true;
+ }
+ 
+ unsigned long SdmMeter::loop(MicroTasks::WakeReason reason)
+ {
+   if(_waiting)
+   {
+-    bool done = handleResponse();
+-    if(!done && millis() - _sentAt < SDM_METER_TIMEOUT) {
++    uint32_t raw = 0;
++    SdmMeterFrame frame = receive(raw);
++    if(SDM_FRAME_INCOMPLETE == frame && millis() - _sentAt < SDM_METER_TIMEOUT) {
+       return 5;
+     }
+-    if(!done) {
+-      _errors++;
+-    }
+     _waiting = false;
+-    if(!_absent && millis() - _lastResponse >= SDM_METER_ABSENT_AFTER) {
+-      DBUGLN("SdmMeter: no answer, assuming no meter fitted");
+-      _absent = true;
++
++    if(_detecting) {
++      return detectStep(frame, raw);
+     }
+-    if(_absent) {
++
++    float value;
++    if(SDM_FRAME_OK == frame)
++    {
++      if(sdm_meter_decode(_card, (SdmMeterQuantity)_index, raw, value)) {
++        _values[_index] = value;
++        _updated[_index] = millis();
++        _responses++;
++        _lastResponse = millis();
++        _absent = false;
++      }
++    } else {
++      DBUGF("SdmMeter: no valid response for value %d", _index);
++      _errors++;
++    }
++
++    if(millis() - _lastResponse >= SDM_METER_LOST_AFTER) {
++      // Meter lost: find it again (it may have been swapped or reconfigured)
+       _index = 0;
+-      return SDM_METER_PROBE;
++      checkAbsent();
++      startDetection();
++      return _absent ? SDM_METER_PROBE : SDM_METER_GAP;
+     }
+     _index = (_index + 1) % ValueCount;
+     if(0 == _index && isValid() && millis() - _published >= SDM_METER_PUBLISH) {
+diff --git a/src/sdm_meter.h b/src/sdm_meter.h
+index d1d6bd83..8a7d20a9 100644
+--- a/src/sdm_meter.h
++++ b/src/sdm_meter.h
+@@ -2,11 +2,17 @@
+ // Reads voltage, current and power per phase plus total power and energy, so boards with a
+ // three-phase MID meter report real values instead of V x A x 3 from the controller's single CT.
+ // Enable with -D ENABLE_SDM_METER; the RS485 transceiver must switch direction automatically.
++//
++// The meter type is detected at start and after the meter was lost: L1 voltage is read with
++// the SDM630 map (float) first, then with the native DTS4921 map (integers); the first map
++// that gives a plausible mains voltage is kept. A meter that does not answer at 8N1 is tried
++// at 8E1 (DTS4921 factory setting) and the other way round. The driver never writes registers.
+ #ifndef SDM_METER_H
+ #define SDM_METER_H
+ 
+ #include <Arduino.h>
+ #include <MicroTasks.h>
++#include "sdm_meter_proto.h"
+ 
+ #ifndef SDM_METER_SERIAL
+ #define SDM_METER_SERIAL Serial2
+@@ -35,8 +41,9 @@ class SdmMeter : public MicroTasks::Task
+       ValueCount
+     };
+ 
++    enum SerialConfig { Serial8N1 = 0, Serial8E1 = 1 };
++
+   private:
+-    static const uint16_t _registers[ValueCount];
+     float _values[ValueCount];
+     uint32_t _updated[ValueCount];
+     uint8_t _index;
+@@ -51,9 +58,27 @@ class SdmMeter : public MicroTasks::Task
+     uint32_t _responses;
+     uint32_t _errors;
+ 
+-    static uint16_t crc16(const uint8_t *data, size_t len);
++    // Detection: _card/_serial are in use, _goodCard/_goodSerial last worked
++    SdmMeterCard _card;
++    SdmMeterCard _goodCard;
++    SerialConfig _serial;
++    SerialConfig _goodSerial;
++    bool _detected;      // a meter map was found since start
++    bool _detecting;
++    bool _answered;      // the meter answered during this detection round
++    uint8_t _fails;      // failed requests on the current candidate
++    uint8_t _cardsTried; // maps tried on the current serial setting
++    uint8_t _serialsTried;
++
+     void sendRequest();
+-    bool handleResponse();
++    SdmMeterFrame receive(uint32_t &raw);
++    void openSerial(SerialConfig serial);
++    void startDetection();
++    unsigned long detectStep(SdmMeterFrame frame, uint32_t raw);
++    unsigned long nextCard();
++    unsigned long nextSerial();
++    unsigned long roundFailed();
++    void checkAbsent();
+     void publish();
+ 
+   protected:
+@@ -75,6 +100,10 @@ class SdmMeter : public MicroTasks::Task
+     uint32_t getRequests() { return _requests; }
+     uint32_t getResponses() { return _responses; }
+     uint32_t getErrors() { return _errors; }
++    // "sdm630" or "dts4921" once detected, "unknown" before
++    const char *getType() { return _detected ? sdm_meter_card_name(_goodCard) : "unknown"; }
++    // Serial setting in use, "8N1" or "8E1"
++    const char *getSerialConfig() { return Serial8E1 == _serial ? "8E1" : "8N1"; }
+ };
+ 
+ extern SdmMeter sdmMeter;
+diff --git a/src/sdm_meter_proto.cpp b/src/sdm_meter_proto.cpp
+new file mode 100644
+index 00000000..c891bdd9
+--- /dev/null
++++ b/src/sdm_meter_proto.cpp
+@@ -0,0 +1,133 @@
++#include "sdm_meter_proto.h"
++
++#include <string.h>
++#include <math.h>
++
++// SDM630 input registers (FC 0x04, IEEE-754 float, big-endian)
++static const uint16_t sdm630_registers[SDM_Q_COUNT] = {
++  0x0000, 0x0002, 0x0004, // voltage L1-L3
++  0x0006, 0x0008, 0x000A, // current L1-L3
++  0x000C, 0x000E, 0x0010, // active power L1-L3
++  0x0034,                 // total system power
++  0x0048,                 // import active energy kWh
++  0x0156                  // total active energy kWh
++};
++
++// DTS4921 native registers (FC 0x03/0x04, 32 bit, high word first)
++static const uint16_t dts4921_registers[SDM_Q_COUNT] = {
++  0x0100, 0x0102, 0x0104, // voltage L1-L3, uint32, 0.1 V
++  0x0106, 0x0108, 0x010A, // current L1-L3, uint32, 0.001 A
++  0x0110, 0x0112, 0x0114, // active power L1-L3, int32, 0.1 W
++  0x010E,                 // total active power, int32, 0.1 W
++  0x0027,                 // positive (import) active energy, uint32, 0.01 kWh
++  0x001D                  // total active energy, uint32, 0.01 kWh
++};
++
++uint16_t sdm_meter_crc16(const uint8_t *data, size_t len)
++{
++  uint16_t crc = 0xFFFF;
++  for(size_t i = 0; i < len; i++)
++  {
++    crc ^= data[i];
++    for(int b = 0; b < 8; b++) {
++      crc = (crc & 1) ? (crc >> 1) ^ 0xA001 : crc >> 1;
++    }
++  }
++  return crc;
++}
++
++uint16_t sdm_meter_register(SdmMeterCard card, SdmMeterQuantity q)
++{
++  return SDM_CARD_DTS4921 == card ? dts4921_registers[q] : sdm630_registers[q];
++}
++
++size_t sdm_meter_build_request(uint8_t *out, uint8_t address, uint16_t reg)
++{
++  out[0] = address;
++  out[1] = SDM_METER_FC_READ_INPUT;
++  out[2] = (uint8_t)(reg >> 8);
++  out[3] = (uint8_t)(reg & 0xFF);
++  out[4] = 0x00;
++  out[5] = 0x02;
++  uint16_t crc = sdm_meter_crc16(out, 6);
++  out[6] = crc & 0xFF;
++  out[7] = crc >> 8;
++  return SDM_METER_REQUEST_LEN;
++}
++
++size_t sdm_meter_expected_length(const uint8_t *rx, size_t len)
++{
++  if(len >= 2 && (rx[1] & 0x80)) {
++    return SDM_METER_EXCEPTION_LEN;
++  }
++  return SDM_METER_RESPONSE_LEN;
++}
++
++SdmMeterFrame sdm_meter_parse(const uint8_t *rx, size_t len, uint8_t address, uint32_t &raw)
++{
++  size_t expected = sdm_meter_expected_length(rx, len);
++  if(len < expected) {
++    return SDM_FRAME_INCOMPLETE;
++  }
++  uint16_t crc = sdm_meter_crc16(rx, expected - 2);
++  if(rx[0] != address ||
++     rx[expected - 2] != (crc & 0xFF) || rx[expected - 1] != (crc >> 8)) {
++    return SDM_FRAME_BAD;
++  }
++  if(SDM_METER_EXCEPTION_LEN == expected) {
++    return (SDM_METER_FC_READ_INPUT | 0x80) == rx[1] ? SDM_FRAME_EXCEPTION : SDM_FRAME_BAD;
++  }
++  if(rx[1] != SDM_METER_FC_READ_INPUT || rx[2] != 0x04) {
++    return SDM_FRAME_BAD;
++  }
++  raw = ((uint32_t)rx[3] << 24) | ((uint32_t)rx[4] << 16) | ((uint32_t)rx[5] << 8) | rx[6];
++  return SDM_FRAME_OK;
++}
++
++bool sdm_meter_decode(SdmMeterCard card, SdmMeterQuantity q, uint32_t raw, float &value)
++{
++  if(SDM_CARD_DTS4921 != card)
++  {
++    float f;
++    memcpy(&f, &raw, sizeof(f));
++    if(isnan(f)) {
++      return false;
++    }
++    value = f;
++    return true;
++  }
++
++  switch(q)
++  {
++    case SDM_Q_VOLTAGE_L1: case SDM_Q_VOLTAGE_L2: case SDM_Q_VOLTAGE_L3:
++      value = (float)((double)raw * 0.1);
++      break;
++    case SDM_Q_CURRENT_L1: case SDM_Q_CURRENT_L2: case SDM_Q_CURRENT_L3:
++      value = (float)((double)raw * 0.001);
++      break;
++    case SDM_Q_POWER_L1: case SDM_Q_POWER_L2: case SDM_Q_POWER_L3: case SDM_Q_POWER_TOTAL:
++      value = (float)((double)(int32_t)raw * 0.1);
++      break;
++    case SDM_Q_IMPORT_ENERGY: case SDM_Q_TOTAL_ENERGY:
++      value = (float)((double)raw * 0.01);
++      break;
++    default:
++      return false;
++  }
++  return true;
++}
++
++bool sdm_meter_voltage_plausible(float volts)
++{
++  return volts >= SDM_METER_PLAUSIBLE_MIN_V && volts <= SDM_METER_PLAUSIBLE_MAX_V;
++}
++
++const char *sdm_meter_card_name(SdmMeterCard card)
++{
++  switch(card)
++  {
++    case SDM_CARD_SDM630: return "sdm630";
++    case SDM_CARD_DTS4921: return "dts4921";
++    default: return "unknown";
++  }
++}
+diff --git a/src/sdm_meter_proto.h b/src/sdm_meter_proto.h
+new file mode 100644
+index 00000000..ed942987
+--- /dev/null
++++ b/src/sdm_meter_proto.h
+@@ -0,0 +1,69 @@
++#ifndef SDM_METER_PROTO_H
++#define SDM_METER_PROTO_H
++
++// Pure Modbus RTU framing and register maps for the energy meter driver (sdm_meter.cpp).
++// No Arduino includes, so it is host-testable (test/test_sdm_meter_proto).
++//
++// Two register maps ("cards") are known on Kinetos boards:
++//   SDM630  Eastron SDM630 / SDM72D-M input registers, IEEE-754 float
++//   DTS4921 native map of the DTS4921 meter: uint32/int32 with fixed scaling
++// Both are read with function 0x04, two registers per value, high word first.
++// The driver only ever reads; it never writes a register (on the DTS4921, writes to
++// 0x0020 clear the energy counters and 0x0061-0x0063 change address/baud/parity).
++
++#include <stdint.h>
++#include <stddef.h>
++
++enum SdmMeterCard {
++  SDM_CARD_SDM630 = 0,
++  SDM_CARD_DTS4921 = 1,
++  SDM_CARD_COUNT
++};
++
++// Order of the values, the same as SdmMeter::Value
++enum SdmMeterQuantity {
++  SDM_Q_VOLTAGE_L1, SDM_Q_VOLTAGE_L2, SDM_Q_VOLTAGE_L3,
++  SDM_Q_CURRENT_L1, SDM_Q_CURRENT_L2, SDM_Q_CURRENT_L3,
++  SDM_Q_POWER_L1, SDM_Q_POWER_L2, SDM_Q_POWER_L3,
++  SDM_Q_POWER_TOTAL, SDM_Q_IMPORT_ENERGY, SDM_Q_TOTAL_ENERGY,
++  SDM_Q_COUNT
++};
++
++enum SdmMeterFrame {
++  SDM_FRAME_INCOMPLETE,  // wait for more bytes
++  SDM_FRAME_OK,          // valid answer, raw value filled in
++  SDM_FRAME_EXCEPTION,   // valid exception answer (the meter talks, but not this map)
++  SDM_FRAME_BAD          // wrong address/function/length or CRC
++};
++
++#define SDM_METER_FC_READ_INPUT   0x04
++#define SDM_METER_REQUEST_LEN     8
++#define SDM_METER_RESPONSE_LEN    9   // address, fc, 4, 4 data bytes, CRC
++#define SDM_METER_EXCEPTION_LEN   5   // address, fc | 0x80, code, CRC
++
++// Mains voltage that counts as a plausible reading of L1 during detection
++#define SDM_METER_PLAUSIBLE_MIN_V 100.0f
++#define SDM_METER_PLAUSIBLE_MAX_V 300.0f
++
++uint16_t sdm_meter_crc16(const uint8_t *data, size_t len);
++
++// Register of a value in the given map
++uint16_t sdm_meter_register(SdmMeterCard card, SdmMeterQuantity q);
++
++// Read-input-registers request for two registers at reg; out needs SDM_METER_REQUEST_LEN bytes
++size_t sdm_meter_build_request(uint8_t *out, uint8_t address, uint16_t reg);
++
++// Number of bytes the answer will have, judged from the bytes received so far
++size_t sdm_meter_expected_length(const uint8_t *rx, size_t len);
++
++// Checks a (possibly partial) answer; on SDM_FRAME_OK raw holds the 32-bit value, high word first
++SdmMeterFrame sdm_meter_parse(const uint8_t *rx, size_t len, uint8_t address, uint32_t &raw);
++
++// Converts the raw 32-bit value into V, A, W or kWh. Returns false for NaN (SDM630).
++bool sdm_meter_decode(SdmMeterCard card, SdmMeterQuantity q, uint32_t raw, float &value);
++
++bool sdm_meter_voltage_plausible(float volts);
++
++const char *sdm_meter_card_name(SdmMeterCard card);
++
++#endif // SDM_METER_PROTO_H
+diff --git a/src/web_server.cpp b/src/web_server.cpp
+index 78085aba..eff0308c 100644
+--- a/src/web_server.cpp
++++ b/src/web_server.cpp
+@@ -559,8 +559,9 @@ static String html_escape(const String &input) {
+ #define STATUS_JSON_EEBUS 0
+ #endif
+ #ifdef KINETOS_EXTRAS
+-// Kinetos adds about 25 members (meter, feed, budget, sessions, LEDs, panic record)
+-#define STATUS_JSON_CAPACITY (JSON_OBJECT_SIZE(164 + STATUS_JSON_EEBUS) + 3072)
++// Kinetos adds about 27 members (meter incl. meter_type/meter_serial, feed, budget,
++// sessions, LEDs, panic record)
++#define STATUS_JSON_CAPACITY (JSON_OBJECT_SIZE(166 + STATUS_JSON_EEBUS) + 3072)
+ #else
+ #define STATUS_JSON_CAPACITY (JSON_OBJECT_SIZE(134 + STATUS_JSON_EEBUS) + 2048)
+ #endif
+diff --git a/test/test_sdm_meter_proto/test_sdm_meter_proto.cpp b/test/test_sdm_meter_proto/test_sdm_meter_proto.cpp
+new file mode 100644
+index 00000000..47b325e2
+--- /dev/null
++++ b/test/test_sdm_meter_proto/test_sdm_meter_proto.cpp
+@@ -0,0 +1,116 @@
++#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
++#include "doctest.h"
++#include <string.h>
++#include <vector>
++#include "sdm_meter_proto.h"
++
++static std::vector<uint8_t> with_crc(std::vector<uint8_t> f)
++{
++  uint16_t crc = sdm_meter_crc16(f.data(), f.size());
++  f.push_back(crc & 0xFF);
++  f.push_back(crc >> 8);
++  return f;
++}
++
++static SdmMeterFrame parse(const std::vector<uint8_t> &f, uint32_t &raw)
++{
++  return sdm_meter_parse(f.data(), f.size(), 1, raw);
++}
++
++TEST_CASE("DTS4921 example from the manufacturer: request and 238.1 V answer")
++{
++  uint8_t req[SDM_METER_REQUEST_LEN];
++  REQUIRE(sdm_meter_register(SDM_CARD_DTS4921, SDM_Q_VOLTAGE_L1) == 0x0100);
++  REQUIRE(sdm_meter_build_request(req, 1, 0x0100) == 8);
++  const uint8_t expected[8] = { 0x01, 0x04, 0x01, 0x00, 0x00, 0x02, 0x70, 0x37 };
++  CHECK(memcmp(req, expected, 8) == 0);
++
++  const std::vector<uint8_t> answer = { 0x01, 0x04, 0x04, 0x00, 0x00, 0x09, 0x4D, 0x3D, 0xE1 };
++  uint32_t raw = 0;
++  REQUIRE(parse(answer, raw) == SDM_FRAME_OK);
++  CHECK(raw == 0x094D);
++  float v = 0;
++  REQUIRE(sdm_meter_decode(SDM_CARD_DTS4921, SDM_Q_VOLTAGE_L1, raw, v));
++  CHECK(v == doctest::Approx(238.1).epsilon(1e-5));
++  CHECK(sdm_meter_voltage_plausible(v));
++}
++
++TEST_CASE("SDM630 request and float answer stay as before")
++{
++  uint8_t req[SDM_METER_REQUEST_LEN];
++  sdm_meter_build_request(req, 1, sdm_meter_register(SDM_CARD_SDM630, SDM_Q_VOLTAGE_L1));
++  const uint8_t expected[8] = { 0x01, 0x04, 0x00, 0x00, 0x00, 0x02, 0x71, 0xCB };
++  CHECK(memcmp(req, expected, 8) == 0);
++  CHECK(sdm_meter_register(SDM_CARD_SDM630, SDM_Q_POWER_TOTAL) == 0x0034);
++  CHECK(sdm_meter_register(SDM_CARD_SDM630, SDM_Q_IMPORT_ENERGY) == 0x0048);
++  CHECK(sdm_meter_register(SDM_CARD_SDM630, SDM_Q_TOTAL_ENERGY) == 0x0156);
++
++  // 230.0 V = 0x43660000
++  uint32_t raw = 0;
++  REQUIRE(parse(with_crc({ 0x01, 0x04, 0x04, 0x43, 0x66, 0x00, 0x00 }), raw) == SDM_FRAME_OK);
++  float v = 0;
++  REQUIRE(sdm_meter_decode(SDM_CARD_SDM630, SDM_Q_VOLTAGE_L1, raw, v));
++  CHECK(v == doctest::Approx(230.0));
++  CHECK(sdm_meter_voltage_plausible(v));
++
++  // NaN is not taken
++  CHECK_FALSE(sdm_meter_decode(SDM_CARD_SDM630, SDM_Q_VOLTAGE_L1, 0x7FC00000, v));
++}
++
++TEST_CASE("The wrong map gives an implausible voltage")
++{
++  float v = 0;
++  // DTS4921 integer 238.1 V read as SDM630 float: a denormal near 0 (issue #4: 1.6e-33 V)
++  REQUIRE(sdm_meter_decode(SDM_CARD_SDM630, SDM_Q_VOLTAGE_L1, 0x094D, v));
++  CHECK_FALSE(sdm_meter_voltage_plausible(v));
++  // SDM630 float 230 V read as DTS4921 integer: millions of volts
++  REQUIRE(sdm_meter_decode(SDM_CARD_DTS4921, SDM_Q_VOLTAGE_L1, 0x43660000, v));
++  CHECK_FALSE(sdm_meter_voltage_plausible(v));
++  CHECK_FALSE(sdm_meter_voltage_plausible(0.0f));
++  CHECK_FALSE(sdm_meter_voltage_plausible(99.9f));
++  CHECK_FALSE(sdm_meter_voltage_plausible(300.1f));
++  CHECK(sdm_meter_voltage_plausible(100.0f));
++  CHECK(sdm_meter_voltage_plausible(300.0f));
++}
++
++TEST_CASE("DTS4921 scaling: current, signed power, energy")
++{
++  float v = 0;
++  REQUIRE(sdm_meter_decode(SDM_CARD_DTS4921, SDM_Q_CURRENT_L2, 16123, v));
++  CHECK(v == doctest::Approx(16.123));
++  REQUIRE(sdm_meter_decode(SDM_CARD_DTS4921, SDM_Q_POWER_TOTAL, 110400, v));
++  CHECK(v == doctest::Approx(11040.0));
++  REQUIRE(sdm_meter_decode(SDM_CARD_DTS4921, SDM_Q_POWER_L1, (uint32_t)-153, v));
++  CHECK(v == doctest::Approx(-15.3));
++  REQUIRE(sdm_meter_decode(SDM_CARD_DTS4921, SDM_Q_IMPORT_ENERGY, 1234567, v));
++  CHECK(v == doctest::Approx(12345.67));
++  CHECK(sdm_meter_register(SDM_CARD_DTS4921, SDM_Q_POWER_TOTAL) == 0x010E);
++  CHECK(sdm_meter_register(SDM_CARD_DTS4921, SDM_Q_POWER_L3) == 0x0114);
++  CHECK(sdm_meter_register(SDM_CARD_DTS4921, SDM_Q_IMPORT_ENERGY) == 0x0027);
++  CHECK(sdm_meter_register(SDM_CARD_DTS4921, SDM_Q_TOTAL_ENERGY) == 0x001D);
++}
++
++TEST_CASE("Exception, CRC and partial frames")
++{
++  uint32_t raw = 0;
++  std::vector<uint8_t> ex = with_crc({ 0x01, 0x84, 0x02 });
++  CHECK(sdm_meter_expected_length(ex.data(), 1) == SDM_METER_RESPONSE_LEN);
++  CHECK(sdm_meter_expected_length(ex.data(), 2) == SDM_METER_EXCEPTION_LEN);
++  CHECK(sdm_meter_parse(ex.data(), 3, 1, raw) == SDM_FRAME_INCOMPLETE);
++  CHECK(parse(ex, raw) == SDM_FRAME_EXCEPTION);
++
++  std::vector<uint8_t> ok = { 0x01, 0x04, 0x04, 0x00, 0x00, 0x09, 0x4D, 0x3D, 0xE1 };
++  CHECK(sdm_meter_parse(ok.data(), 8, 1, raw) == SDM_FRAME_INCOMPLETE);
++  std::vector<uint8_t> bad = ok;
++  bad[6] ^= 0x01;
++  CHECK(parse(bad, raw) == SDM_FRAME_BAD);
++  CHECK(sdm_meter_parse(ok.data(), ok.size(), 2, raw) == SDM_FRAME_BAD); // other slave
++  CHECK(parse(with_crc({ 0x01, 0x03, 0x04, 0x00, 0x00, 0x09, 0x4D }), raw) == SDM_FRAME_BAD); // other function
++  CHECK(parse(with_crc({ 0x01, 0x83, 0x02 }), raw) == SDM_FRAME_BAD);
++}
++
++TEST_CASE("Names")
++{
++  CHECK(strcmp(sdm_meter_card_name(SDM_CARD_SDM630), "sdm630") == 0);
++  CHECK(strcmp(sdm_meter_card_name(SDM_CARD_DTS4921), "dts4921") == 0);
++}

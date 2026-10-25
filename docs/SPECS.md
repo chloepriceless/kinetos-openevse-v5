@@ -85,12 +85,12 @@ OpenEVSE; das Image von Kinetos OpenEVSE V5 passt (≈ 95 % eines Slots).
 
 | Parameter | Wert |
 |---|---|
-| Schnittstelle | UART2, RX 35 / TX 17, 9600 Baud, 8N1 |
+| Schnittstelle | UART2, RX 35 / TX 17, 9600 Baud, 8N1 (DTS4921 ab Werk 8E1) |
 | Slave-Adresse | 1 |
 | Funktion | 0x04 Read Input Registers, 2 Register pro Wert |
 | Format | IEEE-754-Float, Big-Endian |
 | CRC | Modbus CRC16 (0xFFFF, Polynom 0xA001) |
-| Kompatibel zu | Eastron SDM630 / SDM72D-M |
+| Kompatibel zu | Eastron SDM630 / SDM72D-M (Variante 1); Variante 2: DTS4921, eigene Karte (unten) |
 
 | Index | Register | Messwert |
 |---|---|---|
@@ -100,6 +100,24 @@ OpenEVSE; das Image von Kinetos OpenEVSE V5 passt (≈ 95 % eines Slots).
 | 9 | 0x0034 | Gesamt-Wirkleistung [W] |
 | 10 | 0x0048 | Import-Wirkenergie [kWh] |
 | 11 | 0x0156 | Gesamt-Wirkenergie [kWh] |
+
+**DTS4921** (zweite Zählervariante, laut Herstellerdoku; FC 0x03 oder 0x04, 2 Register pro Wert,
+höherwertiges Wort zuerst, Ganzzahlen):
+
+| Index | Register | Messwert |
+|---|---|---|
+| 0–2 | 0x0100 / 0x0102 / 0x0104 | Spannung L1–L3, uint32 · 0,1 V |
+| 3–5 | 0x0106 / 0x0108 / 0x010A | Strom L1–L3, uint32 · 0,001 A |
+| 6–8 | 0x0110 / 0x0112 / 0x0114 | Wirkleistung L1–L3, int32 · 0,1 W |
+| 9 | 0x010E | Gesamt-Wirkleistung, int32 · 0,1 W |
+| 10 | 0x0027 | Bezug (positive Wirkenergie), uint32 · 0,01 kWh |
+| 11 | 0x001D | Gesamt-Wirkenergie, uint32 · 0,01 kWh |
+| – | 0x0031 | Einspeisung, uint32 · 0,01 kWh (nicht gelesen) |
+
+Beispiel: `01 04 01 00 00 02 70 37` → `01 04 04 00 00 09 4D 3D E1` = 0x094D = 2381 → 238,1 V.
+Schreibregister (nie benutzen): 0x0020 (0x5555 = Zähler auf null), 0x0061 Adresse, 0x0062 Baudrate,
+0x0063 Datenformat (0 = 8N1, 1 = 8O1, 2 = 8E1). Kinetos OpenEVSE V5 erkennt Karte und Parität
+selbst (README, „Zählervarianten“).
 
 Die Kinetos-Firmware zählt Phasen mit I > 1 A und schickt dem Controller `$SL 1` (1 Phase) bzw.
 `$SL 2` (2–3 Phasen).

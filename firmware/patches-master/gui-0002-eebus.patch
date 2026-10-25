@@ -1,0 +1,658 @@
+diff --git a/src/lib/config/__tests__/pages.test.js b/src/lib/config/__tests__/pages.test.js
+index 0eb0d21..cac8e33 100644
+--- a/src/lib/config/__tests__/pages.test.js
++++ b/src/lib/config/__tests__/pages.test.js
+@@ -3,8 +3,8 @@ import { describe, it, expect } from 'vitest'
+ import { SETTINGS_PAGES, SECTIONS, pagesBySection } from '../pages.js'
+ 
+ describe('SETTINGS_PAGES', () => {
+-  it('lists all 20 config pages', () => {
+-    expect(SETTINGS_PAGES).toHaveLength(20)
++  it('lists all 21 config pages', () => {
++    expect(SETTINGS_PAGES).toHaveLength(21)
+   })
+   it('every page has key, route, icon, labelKey, section', () => {
+     for (const p of SETTINGS_PAGES) {
+@@ -35,9 +35,9 @@ describe('pagesBySection', () => {
+   it('groups every page under its section, no section empty', () => {
+     // tft_theme present so the capability-gated Display page is included;
+     // dev_features on so the Labs-gated Load Sharing page is included too;
+-    // the two Kinetos keys so the Modbus and Grid dimming pages are included.
++    // the Kinetos keys so the Modbus, Grid dimming and EEBUS pages are included.
+     const grouped = pagesBySection(
+-      { tft_theme: 'dark', modbus_tcp_port: 502, dimming_limit: 4200 },
++      { tft_theme: 'dark', modbus_tcp_port: 502, dimming_limit: 4200, eebus_failsafe_duration: 7200 },
+       { dev_features: true },
+     )
+     expect(grouped).toHaveLength(4)
+@@ -47,7 +47,7 @@ describe('pagesBySection', () => {
+       expect(g.pages.length).toBeGreaterThan(0)
+       total += g.pages.length
+     }
+-    expect(total).toBe(20)
++    expect(total).toBe(21)
+   })
+   it('gates the Display page on either display key being present', () => {
+     // A TFT build sends tft_theme; a controller with the 2-line character LCD
+@@ -59,6 +59,15 @@ describe('pagesBySection', () => {
+     expect(keysFor({ lcd_type: 'rgb' })).toContain('display')
+     expect(keysFor({ tft_theme: 'dark', lcd_type: 'mono' })).toContain('display')
+   })
++  it('shows the EEBUS page and hides OCPP on the EEBUS firmware', () => {
++    const keysFor = (config) =>
++      pagesBySection(config, { dev_features: true }).flatMap((g) => g.pages.map((p) => p.key))
++    expect(keysFor({})).toContain('ocpp')
++    expect(keysFor({})).not.toContain('eebus')
++    const eebus = keysFor({ eebus_failsafe_duration: 7200, ocpp_unavailable: true })
++    expect(eebus).toContain('eebus')
++    expect(eebus).not.toContain('ocpp')
++  })
+   it('gates the Kinetos Modbus and Grid dimming pages on their config keys', () => {
+     const keysFor = (config) =>
+       pagesBySection(config, { dev_features: true }).flatMap((g) => g.pages.map((p) => p.key))
+diff --git a/src/lib/config/pages.js b/src/lib/config/pages.js
+index 04ea218..0606703 100644
+--- a/src/lib/config/pages.js
++++ b/src/lib/config/pages.js
+@@ -9,7 +9,8 @@ export const SETTINGS_PAGES = [
+   { key: 'network', route: '/settings/network', icon: 'mdi:wifi', labelKey: 'config.pages.network', section: 'connectivity' },
+   { key: 'http', route: '/settings/http', icon: 'mdi:web', labelKey: 'config.pages.http', section: 'connectivity' },
+   { key: 'mqtt', route: '/settings/mqtt', icon: 'mdi:transit-connection-variant', labelKey: 'config.pages.mqtt', section: 'connectivity' },
+-  { key: 'ocpp', route: '/settings/ocpp', icon: 'mdi:ev-station', labelKey: 'config.pages.ocpp', section: 'connectivity' },
++  // The EEBUS firmware has no OCPP (both do not fit into 4 MB) and says so.
++  { key: 'ocpp', route: '/settings/ocpp', icon: 'mdi:ev-station', labelKey: 'config.pages.ocpp', section: 'connectivity', unless: 'ocpp_unavailable' },
+   // Kinetos firmware only: gated on a config key stock firmware does not
+   // report (truthy check — modbus_tcp_port defaults to 502).
+   { key: 'modbus', route: '/settings/modbus', icon: 'mdi:lan-connect', labelKey: 'config.pages.modbus', section: 'connectivity', requires: 'modbus_tcp_port' },
+@@ -28,6 +29,9 @@ export const SETTINGS_PAGES = [
+   // Kinetos firmware only: grid operator dimming (§14a EnWG). dimming_limit
+   // is always >= 1400 W when present, so the truthy capability check holds.
+   { key: 'dimming', route: '/settings/dimming', icon: 'mdi:transmission-tower', labelKey: 'config.pages.dimming', section: 'energy', requires: 'dimming_limit' },
++  // EEBUS firmware only. The failsafe duration is at least 2 h when present,
++  // so the truthy capability check holds.
++  { key: 'eebus', route: '/settings/eebus', icon: 'mdi:home-lightning-bolt-outline', labelKey: 'config.pages.eebus', section: 'energy', requires: 'eebus_failsafe_duration' },
+   { key: 'emoncms', route: '/settings/emoncms', icon: 'mdi:chart-box-outline', labelKey: 'config.pages.emoncms', section: 'energy' },
+   // System
+   { key: 'firmware', route: '/settings/firmware', icon: 'mdi:chip', labelKey: 'config.pages.firmware', section: 'system' },
+@@ -43,7 +47,8 @@ export const SETTINGS_PAGES = [
+ ]
+ 
+ // `requires` gates on a device-config capability key, or on any one of a list
+-// of keys; `labs` gates on the client-side OpenEVSE Labs switch
++// of keys; `unless` hides a page when the device reports that key; `labs`
++// gates on the client-side OpenEVSE Labs switch
+ // (uisettings.dev_features), passed in via opts so this stays a pure function
+ // of its inputs.
+ function hasCapability(config, requires) {
+@@ -59,6 +64,7 @@ export function pagesBySection(config, { dev_features = false } = {}) {
+       (p) =>
+         p.section === section &&
+         hasCapability(config, p.requires) &&
++        !(p.unless && config && config[p.unless]) &&
+         (!p.labs || dev_features),
+     ),
+   })).filter((g) => g.pages.length > 0)
+diff --git a/src/lib/i18n/en.json b/src/lib/i18n/en.json
+index f13311b..b2669af 100644
+--- a/src/lib/i18n/en.json
++++ b/src/lib/i18n/en.json
+@@ -219,6 +219,7 @@
+       "loadsharing": "Load Sharing",
+       "shaper": "Load Shaper",
+       "dimming": "Grid dimming (§14a)",
++      "eebus": "EEBUS",
+       "emoncms": "EmonCMS",
+       "firmware": "Firmware",
+       "security": "Security",
+@@ -1356,6 +1357,44 @@
+       "test_off": "Dimming off",
+       "test_failed": "Test failed"
+     },
++    "eebus": {
++      "state": "Power limit",
++      "off": "EEBUS is off",
++      "states": {
++        "disabled": "No energy guard paired",
++        "init": "Waiting for the energy guard",
++        "unlimited_controlled": "Not limited",
++        "limited": "Limited",
++        "failsafe": "Failsafe limit",
++        "unlimited_autonomous": "Not limited (energy guard lost)"
++      },
++      "enable": "Enable EEBUS",
++      "enable_desc": "Lets a grid operator's control box (§14a EnWG) or an energy manager limit the charging power and read the charger's power and energy.",
++      "identity": "This charger",
++      "identity_desc": "The SKI identifies this charger. Enter it in the control box or energy manager to pair from that side.",
++      "port": "Port",
++      "starting": "EEBUS is starting. It needs a network connection.",
++      "paired": "Paired devices",
++      "paired_none": "No device is paired.",
++      "guard": "Energy guard",
++      "unknown": "Unknown device",
++      "peer_connected": "Connected",
++      "peer_waiting": "Waiting for the other side to accept the pairing",
++      "peer_found": "Found, not connected",
++      "peer_absent": "Not found in the network",
++      "unpair": "Remove",
++      "found": "Found in the network",
++      "found_none": "No other EEBUS device found.",
++      "pair": "Pair",
++      "manual": "Pair by SKI",
++      "manual_desc": "The SKI of the other device, 40 hex characters.",
++      "manual_placeholder": "SKI",
++      "pair_failed": "Pairing failed",
++      "failsafe": "Failsafe",
++      "failsafe_desc": "Applies when the energy guard is not heard for 120 s. The energy guard can overwrite both values.",
++      "failsafe_limit": "Failsafe limit (W)",
++      "failsafe_duration": "Failsafe duration (h)"
++    },
+     "led": {
+       "pv": "PV colour",
+       "pv_desc": "Colour shows the PV share while charging.",
+diff --git a/src/lib/kinetos/__tests__/eebus.test.js b/src/lib/kinetos/__tests__/eebus.test.js
+new file mode 100644
+index 0000000..c413757
+--- /dev/null
++++ b/src/lib/kinetos/__tests__/eebus.test.js
+@@ -0,0 +1,75 @@
++import { describe, it, expect } from 'vitest'
++import {
++  normalizeSki, isValidSki, formatSki, peerName, splitPeers, peerStateKey,
++  isLimitedState, formatRemaining, eebusResponseOk,
++} from '../eebus.js'
++
++const SKI = 'd821f6a40448720a57def41308b191ff94f339a6'
++
++describe('SKI helpers', () => {
++  it('accepts 40 hex characters, with spaces, colons and upper case', () => {
++    expect(isValidSki(SKI)).toBe(true)
++    expect(isValidSki('D8:21:F6:A4:04:48:72:0A:57:DE:F4:13:08:B1:91:FF:94:F3:39:A6')).toBe(true)
++    expect(normalizeSki(' D821 f6a4 0448720a57def41308b191ff94f339a6 ')).toBe(SKI)
++  })
++  it('rejects anything else', () => {
++    expect(isValidSki(SKI.slice(1))).toBe(false)
++    expect(isValidSki(SKI + '0')).toBe(false)
++    expect(isValidSki(SKI.replace('d', 'g'))).toBe(false)
++    expect(isValidSki(null)).toBe(false)
++  })
++  it('formats in groups of four', () => {
++    expect(formatSki(SKI)).toBe('d821 f6a4 0448 720a 57de f413 08b1 91ff 94f3 39a6')
++  })
++})
++
++describe('peers', () => {
++  const peers = [
++    { ski: 'a', trusted: true, connected: true, guard: true, brand: 'DVhub', model: 'DVhub' },
++    { ski: 'b', trusted: false, discovered: true, name: 'EVCC_HEMS_01' },
++    { ski: 'c', trusted: true, discovered: false },
++    { ski: 'd', trusted: false, discovered: false },
++  ]
++  it('splits into paired and found', () => {
++    const { paired, found } = splitPeers(peers)
++    expect(paired.map((p) => p.ski)).toEqual(['a', 'c'])
++    expect(found.map((p) => p.ski)).toEqual(['b'])
++    expect(splitPeers(undefined)).toEqual({ paired: [], found: [] })
++  })
++  it('names a node by brand and model, else by its service name', () => {
++    expect(peerName(peers[0])).toBe('DVhub DVhub')
++    expect(peerName(peers[1])).toBe('EVCC_HEMS_01')
++    expect(peerName(peers[2])).toBe('')
++  })
++  it('maps the connection state of a paired node', () => {
++    expect(peerStateKey({ connected: true })).toBe('peer_connected')
++    expect(peerStateKey({ connected: true, waiting: true })).toBe('peer_waiting')
++    expect(peerStateKey({ discovered: true })).toBe('peer_found')
++    expect(peerStateKey({})).toBe('peer_absent')
++  })
++})
++
++describe('limit', () => {
++  it('is in force in the states limited and failsafe', () => {
++    expect(isLimitedState('limited')).toBe(true)
++    expect(isLimitedState('failsafe')).toBe(true)
++    expect(isLimitedState('unlimited_controlled')).toBe(false)
++    expect(isLimitedState('disabled')).toBe(false)
++  })
++  it('formats the remaining time', () => {
++    expect(formatRemaining(7199)).toBe('1 h 59 min')
++    expect(formatRemaining(600)).toBe('10 min')
++    expect(formatRemaining(45)).toBe('45 s')
++    expect(formatRemaining(-1)).toBe('')
++    expect(formatRemaining(undefined)).toBe('')
++  })
++})
++
++describe('eebusResponseOk', () => {
++  it('accepts {msg: done} only', () => {
++    expect(eebusResponseOk({ msg: 'done' })).toBe(true)
++    expect(eebusResponseOk({ msg: 'too many paired nodes' })).toBe(false)
++    expect(eebusResponseOk('error')).toBe(false)
++    expect(eebusResponseOk(null)).toBe(false)
++  })
++})
+diff --git a/src/lib/kinetos/eebus.js b/src/lib/kinetos/eebus.js
+new file mode 100644
+index 0000000..8c4568f
+--- /dev/null
++++ b/src/lib/kinetos/eebus.js
+@@ -0,0 +1,66 @@
++// src/lib/kinetos/eebus.js
++// EEBUS helpers (firmware src/eebus.cpp, GET /eebus).
++
++/** Failsafe limit (W) the firmware accepts from the settings page. */
++export const EEBUS_FAILSAFE_LIMIT = { min: 0, max: 22000, step: 100, default: 4200 }
++/** Failsafe duration in hours; EEBUS allows 2 to 24. */
++export const EEBUS_FAILSAFE_HOURS = { min: 2, max: 24, step: 1, default: 2 }
++
++/** States of the limit, as GET /eebus and the status report them. */
++export const EEBUS_STATES = [
++  'disabled', 'init', 'unlimited_controlled', 'limited', 'failsafe', 'unlimited_autonomous',
++]
++
++/** An SKI is 40 hex characters; spaces and colons from copy and paste are ignored. */
++export function normalizeSki(text) {
++  return String(text ?? '').replace(/[\s:]/g, '').toLowerCase()
++}
++
++export function isValidSki(text) {
++  return /^[0-9a-f]{40}$/.test(normalizeSki(text))
++}
++
++/** The SKI in groups of four characters, as it is read out or compared. */
++export function formatSki(ski) {
++  return normalizeSki(ski).replace(/(.{4})(?=.)/g, '$1 ')
++}
++
++/** What to show as the name of a node. */
++export function peerName(peer) {
++  const parts = [peer?.brand, peer?.model].filter(Boolean)
++  return parts.length ? parts.join(' ') : peer?.name || ''
++}
++
++/** Paired nodes first as their own list, then the ones only found in the network. */
++export function splitPeers(peers) {
++  const list = Array.isArray(peers) ? peers : []
++  return {
++    paired: list.filter((p) => p.trusted),
++    found: list.filter((p) => !p.trusted && p.discovered),
++  }
++}
++
++/** i18n key (below kinetos.eebus) for the connection state of a paired node. */
++export function peerStateKey(peer) {
++  if (peer?.connected) return peer.waiting ? 'peer_waiting' : 'peer_connected'
++  return peer?.discovered ? 'peer_found' : 'peer_absent'
++}
++
++/** True when the state means the charger is limited right now. */
++export function isLimitedState(state) {
++  return state === 'limited' || state === 'failsafe'
++}
++
++/** "1 h 59 min" / "45 s" for the remaining time of a limit; '' when open-ended. */
++export function formatRemaining(seconds) {
++  if (typeof seconds !== 'number' || seconds < 0) return ''
++  if (seconds < 60) return `${seconds} s`
++  const h = Math.floor(seconds / 3600)
++  const m = Math.floor((seconds % 3600) / 60)
++  return h > 0 ? `${h} h ${m} min` : `${m} min`
++}
++
++/** Did POST /eebus/trust or /eebus/untrust succeed? Failures carry another msg or are 'error'. */
++export function eebusResponseOk(res) {
++  return !!res && typeof res === 'object' && res.msg === 'done'
++}
+diff --git a/src/lib/routes.js b/src/lib/routes.js
+index 4337a71..590815a 100644
+--- a/src/lib/routes.js
++++ b/src/lib/routes.js
+@@ -21,6 +21,7 @@ import Solar from '../routes/settings/Solar.svelte'
+ import LoadSharing from '../routes/settings/LoadSharing.svelte'
+ import Shaper from '../routes/settings/Shaper.svelte'
+ import Dimming from '../routes/settings/Dimming.svelte'
++import Eebus from '../routes/settings/Eebus.svelte'
+ import Emoncms from '../routes/settings/Emoncms.svelte'
+ import Firmware from '../routes/settings/Firmware.svelte'
+ import Certificates from '../routes/settings/Certificates.svelte'
+@@ -67,6 +68,7 @@ routes['/settings/solar'] = Solar
+ routes['/settings/loadsharing'] = LoadSharing
+ routes['/settings/shaper'] = Shaper
+ routes['/settings/dimming'] = Dimming
++routes['/settings/eebus'] = Eebus
+ routes['/settings/emoncms'] = Emoncms
+ 
+ // System pages — override the placeholders set above.
+diff --git a/src/routes/__tests__/Settings.test.js b/src/routes/__tests__/Settings.test.js
+index 2dbaf51..0bd506e 100644
+--- a/src/routes/__tests__/Settings.test.js
++++ b/src/routes/__tests__/Settings.test.js
+@@ -29,8 +29,8 @@ describe('Settings hub', () => {
+   it('renders a link for every config page plus the support links', () => {
+     // tft_theme present so the capability-gated Display page renders too;
+     // dev_features on so the Labs-gated Load Sharing page renders too;
+-    // the Kinetos keys so the Modbus and Grid dimming pages render too.
+-    config_store.set({ tft_theme: 'dark', modbus_tcp_port: 502, dimming_limit: 4200 })
++    // the Kinetos keys so the Modbus, Grid dimming and EEBUS pages render too.
++    config_store.set({ tft_theme: 'dark', modbus_tcp_port: 502, dimming_limit: 4200, eebus_failsafe_duration: 7200 })
+     uisettings_store.update((s) => ({ ...s, dev_features: true }))
+     const { getAllByRole } = render(Settings)
+     const links = getAllByRole('link')
+diff --git a/src/routes/settings/Eebus.svelte b/src/routes/settings/Eebus.svelte
+new file mode 100644
+index 0000000..3a3ee87
+--- /dev/null
++++ b/src/routes/settings/Eebus.svelte
+@@ -0,0 +1,213 @@
++<!-- src/routes/settings/Eebus.svelte -->
++<!-- EEBUS (firmware built with ENABLE_EEBUS). Listed in the hub only when
++     /config reports eebus_failsafe_duration (see lib/config/pages.js). -->
++<script>
++  import { _ } from 'svelte-i18n'
++  import { config_store } from '../../lib/stores/config.js'
++  import { createConfigForm } from '../../lib/config/configForm.svelte.js'
++  import { httpAPI } from '../../lib/api/httpAPI.js'
++  import { serialQueue } from '../../lib/queue.js'
++  import {
++    EEBUS_FAILSAFE_LIMIT, EEBUS_FAILSAFE_HOURS, EEBUS_STATES, isValidSki, normalizeSki, formatSki,
++    peerName, splitPeers, peerStateKey, isLimitedState, formatRemaining, eebusResponseOk,
++  } from '../../lib/kinetos/eebus.js'
++  import ConfigPage from '../../lib/components/config/ConfigPage.svelte'
++  import ConfigSection from '../../lib/components/config/ConfigSection.svelte'
++  import FormField from '../../lib/components/config/FormField.svelte'
++  import ReadOnlyRow from '../../lib/components/config/ReadOnlyRow.svelte'
++  import Toggle from '../../lib/components/ui/Toggle.svelte'
++  import NumberInput from '../../lib/components/ui/NumberInput.svelte'
++  import Button from '../../lib/components/ui/Button.svelte'
++
++  const form = createConfigForm()
++  const ss = form.saveState
++
++  let enabled = $derived(!!$config_store?.eebus_enabled)
++
++  // GET /eebus: state of the node and the nodes around it. Polled while the
++  // page is open; pairing changes show up within a few seconds.
++  let data = $state(null)
++  async function refresh() {
++    const res = await serialQueue.add(() => httpAPI('GET', '/eebus'))
++    if (res && typeof res === 'object') data = res
++  }
++  $effect(() => {
++    refresh()
++    const poll = setInterval(refresh, 3000)
++    return () => clearInterval(poll)
++  })
++
++  let peers = $derived(splitPeers(data?.peers))
++  let state = $derived(EEBUS_STATES.includes(data?.state) ? data.state : 'disabled')
++  let limited = $derived(isLimitedState(state))
++  let stateDetail = $derived.by(() => {
++    if (!limited) return ''
++    const rest = formatRemaining(data?.remaining)
++    return `${data?.limit ?? 0} ${$_('units.watt')}${rest ? ' · ' + rest : ''}`
++  })
++
++  // Pairing: POST /eebus/trust and /eebus/untrust with the SKI as the body.
++  let busy = $state(false)
++  let pairError = $state(null)
++  async function pair(ski, trust) {
++    if (busy) return
++    busy = true
++    pairError = null
++    try {
++      const res = await serialQueue.add(() =>
++        httpAPI('POST', trust ? '/eebus/trust' : '/eebus/untrust', normalizeSki(ski)))
++      if (!eebusResponseOk(res)) {
++        pairError = res && typeof res === 'object' && res.msg ? res.msg : $_('kinetos.eebus.pair_failed')
++      }
++      await refresh()
++    } finally {
++      busy = false
++    }
++  }
++
++  let manualSki = $state('')
++  let manualValid = $derived(isValidSki(manualSki))
++  async function pairManual() {
++    await pair(manualSki, true)
++    if (!pairError) manualSki = ''
++  }
++
++  let localRevert = $state(0)
++  function saveFailsafeLimit(v) {
++    if (!Number.isInteger(v) || v < EEBUS_FAILSAFE_LIMIT.min || v > EEBUS_FAILSAFE_LIMIT.max) {
++      localRevert += 1
++      return
++    }
++    form.saveField('eebus_failsafe_limit', v)
++  }
++  function saveFailsafeHours(v) {
++    if (!Number.isInteger(v) || v < EEBUS_FAILSAFE_HOURS.min || v > EEBUS_FAILSAFE_HOURS.max) {
++      localRevert += 1
++      return
++    }
++    form.saveField('eebus_failsafe_duration', v * 3600)
++  }
++</script>
++
++<ConfigPage title={$_('config.pages.eebus')}>
++  <ConfigSection>
++    <ReadOnlyRow
++      label={$_('kinetos.eebus.state')}
++      value={enabled ? $_('kinetos.eebus.states.' + state) : $_('kinetos.eebus.off')}
++      detail={stateDetail}
++      tone={limited ? 'warn' : 'default'}
++    />
++    <FormField
++      label={$_('kinetos.eebus.enable')}
++      description={$_('kinetos.eebus.enable_desc')}
++      status={$ss.eebus_enabled ?? 'idle'}
++    >
++      <Toggle
++        checked={enabled}
++        label={$_('kinetos.eebus.enable')}
++        onchange={(v) => form.saveField('eebus_enabled', v)}
++      />
++    </FormField>
++  </ConfigSection>
++
++  {#if enabled}
++    <ConfigSection title={$_('kinetos.eebus.identity')}>
++      <p class="mb-2 text-xs text-text-dim">{$_('kinetos.eebus.identity_desc')}</p>
++      {#if data?.ski}
++        <p class="break-all rounded-xl bg-surface-2 px-3 py-2 font-mono text-sm text-text">{formatSki(data.ski)}</p>
++        <ReadOnlyRow label={$_('kinetos.eebus.port')} value={data.port} />
++      {:else}
++        <p class="text-sm text-text-dim">{$_('kinetos.eebus.starting')}</p>
++      {/if}
++    </ConfigSection>
++
++    <ConfigSection title={$_('kinetos.eebus.paired')}>
++      {#if peers.paired.length === 0}
++        <p class="text-sm text-text-dim">{$_('kinetos.eebus.paired_none')}</p>
++      {/if}
++      {#each peers.paired as peer (peer.ski)}
++        <div class="border-b border-border py-3 last:border-b-0">
++          <div class="flex items-center justify-between gap-3">
++            <div class="min-w-0">
++              <p class="text-sm text-text">
++                {peerName(peer) || $_('kinetos.eebus.unknown')}
++                {#if peer.guard}
++                  <span class="ml-1 rounded-full bg-surface-2 px-2 py-0.5 text-xs text-warning">{$_('kinetos.eebus.guard')}</span>
++                {/if}
++              </p>
++              <p class="break-all font-mono text-xs text-text-dim">{formatSki(peer.ski)}</p>
++              <p class="text-xs {peer.connected && !peer.waiting ? 'text-accent' : 'text-text-dim'}">
++                {$_('kinetos.eebus.' + peerStateKey(peer))}
++              </p>
++            </div>
++            <div class="w-28 shrink-0">
++              <Button label={$_('kinetos.eebus.unpair')} variant="ghost" disabled={busy} onclick={() => pair(peer.ski, false)} />
++            </div>
++          </div>
++        </div>
++      {/each}
++    </ConfigSection>
++
++    <ConfigSection title={$_('kinetos.eebus.found')}>
++      {#if peers.found.length === 0}
++        <p class="text-sm text-text-dim">{$_('kinetos.eebus.found_none')}</p>
++      {/if}
++      {#each peers.found as peer (peer.ski)}
++        <div class="border-b border-border py-3 last:border-b-0">
++          <div class="flex items-center justify-between gap-3">
++            <div class="min-w-0">
++              <p class="text-sm text-text">{peerName(peer) || $_('kinetos.eebus.unknown')}</p>
++              <p class="break-all font-mono text-xs text-text-dim">{formatSki(peer.ski)}</p>
++            </div>
++            <div class="w-28 shrink-0">
++              <Button label={$_('kinetos.eebus.pair')} disabled={busy} onclick={() => pair(peer.ski, true)} />
++            </div>
++          </div>
++        </div>
++      {/each}
++
++      <FormField label={$_('kinetos.eebus.manual')} description={$_('kinetos.eebus.manual_desc')}>
++        <!-- Bound directly (TextInput only reports on blur): the button
++             below follows the input while typing. -->
++        <input
++          type="text"
++          bind:value={manualSki}
++          placeholder={$_('kinetos.eebus.manual_placeholder')}
++          maxlength="60"
++          autocomplete="off"
++          spellcheck="false"
++          class="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 font-mono text-sm text-text
++                 placeholder:text-text-dim focus:border-accent focus:outline-none"
++        />
++      </FormField>
++      <Button label={$_('kinetos.eebus.pair')} disabled={busy || !manualValid} onclick={pairManual} />
++      {#if pairError}
++        <p class="mt-2 text-xs text-error" role="alert">{pairError}</p>
++      {/if}
++    </ConfigSection>
++
++    <ConfigSection title={$_('kinetos.eebus.failsafe')}>
++      <p class="mb-2 text-xs text-text-dim">{$_('kinetos.eebus.failsafe_desc')}</p>
++      <FormField label={$_('kinetos.eebus.failsafe_limit')} status={$ss.eebus_failsafe_limit ?? 'idle'}>
++        <NumberInput
++          value={$config_store?.eebus_failsafe_limit ?? EEBUS_FAILSAFE_LIMIT.default}
++          min={EEBUS_FAILSAFE_LIMIT.min}
++          max={EEBUS_FAILSAFE_LIMIT.max}
++          step={EEBUS_FAILSAFE_LIMIT.step}
++          revert={form.revert + localRevert}
++          onchange={saveFailsafeLimit}
++        />
++      </FormField>
++      <FormField label={$_('kinetos.eebus.failsafe_duration')} status={$ss.eebus_failsafe_duration ?? 'idle'}>
++        <NumberInput
++          value={Math.round(($config_store?.eebus_failsafe_duration ?? EEBUS_FAILSAFE_HOURS.default * 3600) / 3600)}
++          min={EEBUS_FAILSAFE_HOURS.min}
++          max={EEBUS_FAILSAFE_HOURS.max}
++          step={EEBUS_FAILSAFE_HOURS.step}
++          revert={form.revert + localRevert}
++          onchange={saveFailsafeHours}
++        />
++      </FormField>
++    </ConfigSection>
++  {/if}
++</ConfigPage>
+diff --git a/src/routes/settings/__tests__/Eebus.test.js b/src/routes/settings/__tests__/Eebus.test.js
+new file mode 100644
+index 0000000..095705c
+--- /dev/null
++++ b/src/routes/settings/__tests__/Eebus.test.js
+@@ -0,0 +1,94 @@
++// src/routes/settings/__tests__/Eebus.test.js
++import { describe, it, expect, vi, beforeEach } from 'vitest'
++import { render, fireEvent } from '@testing-library/svelte'
++
++vi.mock('svelte-i18n', () => {
++  const t = (k, opts) => (opts?.values ? `${k} ${JSON.stringify(opts.values)}` : k)
++  t.subscribe = (fn) => { fn(t); return () => {} }
++  return { _: t }
++})
++vi.mock('../../../lib/api/httpAPI.js', () => ({ httpAPI: vi.fn() }))
++
++import { httpAPI } from '../../../lib/api/httpAPI.js'
++import { config_store } from '../../../lib/stores/config.js'
++import { uistates_store } from '../../../lib/stores/uistates.js'
++
++import Eebus from '../Eebus.svelte'
++
++const OWN = 'd821f6a40448720a57def41308b191ff94f339a6'
++const BOX = 'd8d8a68526bb20370327d840fdfd1d78b99953b8'
++const HEMS = 'a0a0e31303cc38b841e131c9491574acd2d7ae70'
++
++const STATE = {
++  enabled: true, running: true, ski: OWN, port: 4712,
++  state: 'limited', limited: true, limit: 4200, remaining: 7199, heartbeat: true,
++  failsafe_limit: 4200, failsafe_duration: 7200,
++  peers: [
++    { ski: BOX, name: 'Steuerbox', brand: '', model: '', type: '', trusted: true, discovered: true, connected: true, waiting: false, guard: true },
++    { ski: HEMS, name: 'EVCC_HEMS_01', brand: 'evcc', model: 'HEMS', type: '', trusted: false, discovered: true, connected: false, waiting: false, guard: false },
++  ],
++}
++
++const posts = (url) =>
++  httpAPI.mock.calls.filter(([m, u]) => m === 'POST' && u === url).map(([, , body]) => body)
++
++beforeEach(() => {
++  uistates_store.resetAlertBox()
++  httpAPI.mockReset()
++  httpAPI.mockImplementation((method, url) =>
++    Promise.resolve(method === 'GET' && url === '/eebus' ? STATE : { msg: 'done' }))
++  config_store.set({ eebus_enabled: true, eebus_failsafe_limit: 4200, eebus_failsafe_duration: 7200 })
++})
++
++describe('EEBUS page', () => {
++  it('shows only the switch while EEBUS is off', () => {
++    config_store.set({ eebus_enabled: false, eebus_failsafe_limit: 4200, eebus_failsafe_duration: 7200 })
++    const { getByText, queryByText } = render(Eebus)
++    expect(getByText('kinetos.eebus.off')).toBeInTheDocument()
++    expect(queryByText('kinetos.eebus.identity')).not.toBeInTheDocument()
++  })
++
++  it('shows the limit, the own SKI and both lists', async () => {
++    const { findByText, getByText } = render(Eebus)
++    expect(await findByText('d821 f6a4 0448 720a 57de f413 08b1 91ff 94f3 39a6')).toBeInTheDocument()
++    expect(getByText('kinetos.eebus.states.limited')).toBeInTheDocument()
++    expect(getByText('4200 units.watt · 1 h 59 min')).toBeInTheDocument()
++    expect(getByText('Steuerbox')).toBeInTheDocument()
++    expect(getByText('kinetos.eebus.guard')).toBeInTheDocument()
++    expect(getByText('kinetos.eebus.peer_connected')).toBeInTheDocument()
++    expect(getByText('evcc HEMS')).toBeInTheDocument()
++  })
++
++  it('pairs a found device and removes a paired one by SKI', async () => {
++    const { findByText, getAllByText, getByText } = render(Eebus)
++    await findByText('evcc HEMS')
++    // first "pair" button belongs to the found device, the last to the manual entry
++    await fireEvent.click(getAllByText('kinetos.eebus.pair')[0])
++    await vi.waitFor(() => expect(posts('/eebus/trust')).toEqual([HEMS]))
++    // the buttons are locked until the first request has finished
++    await vi.waitFor(() => expect(getByText('kinetos.eebus.unpair')).not.toBeDisabled())
++    await fireEvent.click(getByText('kinetos.eebus.unpair'))
++    await vi.waitFor(() => expect(posts('/eebus/untrust')).toEqual([BOX]))
++  })
++
++  it('pairs by a typed SKI once it is valid', async () => {
++    const { findByText, getAllByText, getByPlaceholderText } = render(Eebus)
++    await findByText('evcc HEMS')
++    const manual = getAllByText('kinetos.eebus.pair').at(-1)
++    expect(manual).toBeDisabled()
++    const typed = 'AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD'
++    await fireEvent.input(getByPlaceholderText('kinetos.eebus.manual_placeholder'), { target: { value: typed } })
++    expect(manual).not.toBeDisabled()
++    await fireEvent.click(manual)
++    await vi.waitFor(() => expect(posts('/eebus/trust')).toEqual(['aabbccddeeff00112233445566778899aabbccdd']))
++  })
++
++  it('shows what the charger answers when pairing fails', async () => {
++    httpAPI.mockImplementation((method, url) =>
++      Promise.resolve(method === 'GET' ? STATE : { msg: 'too many paired nodes' }))
++    const { findByText, getAllByText, findByRole } = render(Eebus)
++    await findByText('evcc HEMS')
++    await fireEvent.click(getAllByText('kinetos.eebus.pair')[0])
++    expect(await findByRole('alert')).toHaveTextContent('too many paired nodes')
++  })
++})
