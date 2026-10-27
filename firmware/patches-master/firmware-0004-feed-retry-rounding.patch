@@ -1,0 +1,243 @@
+diff --git a/docs/developer/building.md b/docs/developer/building.md
+index e50b9d3f..38c6e3c5 100644
+--- a/docs/developer/building.md
++++ b/docs/developer/building.md
+@@ -218,7 +218,7 @@ Modbus RTU. Build flags: `ENABLE_SDM_METER`, `SDM_METER_SERIAL` (default `Serial
+ transceiver must switch direction by itself. When the meter answers, `/status` reports its
+ values: `amp`/`voltage` (L1), `power` (total), `amp2`, `amp3`, `voltage2`, `voltage3`,
+ `phases` (phases above 1 A), `meter_import_kwh`, `meter_valid`, `meter_present`, `meter_errors`,
+-`meter_type` and `meter_serial`, and the session energy is integrated from the measured total power.
++`meter_type` and `meter_format`, and the session energy is integrated from the measured total power.
+ If the meter does not answer for 30 s (box sold without meter), `meter_present` turns `false`, the
+ controller values are used and the meter is only probed once a minute.
+ 
+@@ -228,9 +228,19 @@ float) and then with the native DTS4921 map; the first one that gives 100–300
+ `meter_type` (`sdm630` or `dts4921`, `unknown` before the first success). A wrong map answers with
+ valid frames but nonsense (an integer read as float is close to 0 V) or with a Modbus exception.
+ If the meter does not answer three times in a row (timeout or bad CRC), the other parity is tried:
+-8N1 and 8E1 (`meter_serial`). The DTS4921 ships with address 1, 9600 baud, 8E1. The last working
++8N1 and 8E1 (`meter_format`). The DTS4921 ships with address 1, 9600 baud, 8E1. The last working
+ setting is tried first on the next detection. All values keep their units (V, A, W, kWh).
+ 
++On the Kinetos controller (firmware 8.x) the meter values are also fed to the controller, as the
++original firmware did: `$F2 0` switches it to external values, then `$T0 <mA L1> <mA L2> <mA L3>`
++follows every 2 s and `$T1 <Wh>` whenever the import energy changes, charging or not. If the
++controller refuses `$F2 0` (for example while it is disabled or still booting), it is retried
++every second six times and then every minute; it is repeated every 10 minutes and after a `$T0`
++answered with NK. `/status` shows `controller_meter_feed` (on/off), `controller_meter_feed_state`
++(`on`, `enabling`, `f2_rejected`, `f2_no_answer`, `t0_rejected`, `meter_invalid`,
++`controller_not_8x`), `controller_meter_feed_answer` (last RAPI result of `$F2 0`: 0 OK, 1 NK,
++-1 timeout) and `controller_firmware`.
++
+ | Value | SDM630 (float) | DTS4921 (32 bit, high word first) |
+ | --- | --- | --- |
+ | Voltage L1-L3 | 0x0000/02/04 | 0x0100/02/04, uint32, 0.1 V |
+diff --git a/src/input.cpp b/src/input.cpp
+index 987f609f..8648c5cf 100644
+--- a/src/input.cpp
++++ b/src/input.cpp
+@@ -118,21 +118,22 @@ void create_rapi_json(JsonDocument &doc)
+   doc["pilot"] = evse.getChargeCurrent();
+ #ifdef ENABLE_SDM_METER
+   if(sdmMeter.isValid()) {
+-    doc["amp"] = sdmMeter.get(SdmMeter::CurrentL1) * AMPS_SCALE_FACTOR;
+-    doc["voltage"] = sdmMeter.get(SdmMeter::VoltageL1) * VOLTS_SCALE_FACTOR;
+-    doc["power"] = sdmMeter.get(SdmMeter::PowerTotal) * POWER_SCALE_FACTOR;
+-    doc["amp2"] = sdmMeter.get(SdmMeter::CurrentL2) * AMPS_SCALE_FACTOR;
+-    doc["amp3"] = sdmMeter.get(SdmMeter::CurrentL3) * AMPS_SCALE_FACTOR;
+-    doc["voltage2"] = sdmMeter.get(SdmMeter::VoltageL2) * VOLTS_SCALE_FACTOR;
+-    doc["voltage3"] = sdmMeter.get(SdmMeter::VoltageL3) * VOLTS_SCALE_FACTOR;
++    // rounded: the meter's floats would otherwise show as 234.6000061 (issue #2)
++    doc["amp"] = sdmMeter.getRounded(SdmMeter::CurrentL1, 2) * AMPS_SCALE_FACTOR;
++    doc["voltage"] = sdmMeter.getRounded(SdmMeter::VoltageL1, 1) * VOLTS_SCALE_FACTOR;
++    doc["power"] = sdmMeter.getRounded(SdmMeter::PowerTotal, 0) * POWER_SCALE_FACTOR;
++    doc["amp2"] = sdmMeter.getRounded(SdmMeter::CurrentL2, 2) * AMPS_SCALE_FACTOR;
++    doc["amp3"] = sdmMeter.getRounded(SdmMeter::CurrentL3, 2) * AMPS_SCALE_FACTOR;
++    doc["voltage2"] = sdmMeter.getRounded(SdmMeter::VoltageL2, 1) * VOLTS_SCALE_FACTOR;
++    doc["voltage3"] = sdmMeter.getRounded(SdmMeter::VoltageL3, 1) * VOLTS_SCALE_FACTOR;
+     doc["phases"] = sdmMeter.activePhases();
+-    doc["meter_import_kwh"] = sdmMeter.get(SdmMeter::ImportEnergy);
++    doc["meter_import_kwh"] = sdmMeter.getRounded(SdmMeter::ImportEnergy, 2);
+   }
+   doc["meter_valid"] = sdmMeter.isValid();
+   doc["meter_present"] = sdmMeter.isPresent();
+   doc["meter_errors"] = sdmMeter.getErrors();
+   doc["meter_type"] = sdmMeter.getType();
+-  doc["meter_serial"] = sdmMeter.getSerialConfig();
++  doc["meter_format"] = sdmMeter.getSerialConfig();   // 8N1/8E1 (was meter_serial in rev 20)
+ #ifdef KINETOS_EXTRAS
+   kinetos_status(doc);
+ #endif
+diff --git a/src/kinetos/kinetos_extras.cpp b/src/kinetos/kinetos_extras.cpp
+index 63f9e302..a6a78f1c 100644
+--- a/src/kinetos/kinetos_extras.cpp
++++ b/src/kinetos/kinetos_extras.cpp
+@@ -193,8 +193,34 @@ class KinetosControllerFeed : public MicroTasks::Task
+     bool _enabled = false;
+     bool _busy = false;
+     uint32_t _lastWh = 0;
++    uint32_t _enabledAt = 0;
++    int _lastAnswer = RAPI_RESPONSE_OK;
++    const char *_state = "starting";
+     bool _ocppIdChecked = false;
+ 
++    // "$F2 0" switches the controller to external meter values. It can refuse while it is
++    // disabled/sleeping or still booting, so retry quickly a few times and then every minute
++    // for as long as it takes (rev <= 20 gave up after six tries right after boot).
++    unsigned long enable()
++    {
++      if(_tries < 255) {
++        _tries++;
++      }
++      _busy = true;
++      _state = "enabling";
++      rapiSender.sendCmd("$F2 0", [this](int ret) {
++        _busy = false;
++        _lastAnswer = ret;
++        _enabled = (RAPI_RESPONSE_OK == ret);
++        _state = _enabled ? "on" : (RAPI_RESPONSE_NK == ret ? "f2_rejected" : "f2_no_answer");
++        if(_enabled) {
++          _enabledAt = millis();
++        }
++        DBUGF("kinetos: $F2 0 -> %d", ret);
++      });
++      return _tries < 6 ? 1000 : 60UL * 1000UL;
++    }
++
+   protected:
+     void setup() {}
+ 
+@@ -214,29 +240,28 @@ class KinetosControllerFeed : public MicroTasks::Task
+         }
+       }
+       if(0 != strncmp(evse.getFirmwareVersion(), "8.", 2)) {
++        _state = "controller_not_8x";
+         return 10 * 1000; // only the Kinetos controller knows these commands
+       }
+ 
+-      if(!_enabled)
+-      {
+-        if(_tries >= 6) {
+-          return MicroTask.Infinate;
+-        }
+-        _tries++;
+-        _busy = true;
+-        rapiSender.sendCmd("$F2 0", [this](int ret) {
+-          _busy = false;
+-          _enabled = (RAPI_RESPONSE_OK == ret);
+-          DBUGF("kinetos: $F2 0 -> %d", ret);
+-        });
+-        return 1000;
++      if(!_enabled) {
++        return enable();
+       }
+ 
+       kinetos_config_backup();
+ 
++      // Repeat "$F2 0" every 10 minutes: a controller that restarted on its own (the ESP keeps
++      // running) would otherwise silently fall back to its own, empty current reading
++      if(millis() - _enabledAt > 10UL * 60UL * 1000UL) {
++        _tries = 0;
++        return enable();
++      }
++
+       if(!sdmMeter.isValid()) {
++        _state = "meter_invalid";
+         return 2000;
+       }
++      _state = "on";
+ 
+       char cmd[48];
+       snprintf(cmd, sizeof(cmd), "$T0 %lu %lu %lu",
+@@ -244,7 +269,15 @@ class KinetosControllerFeed : public MicroTasks::Task
+         (unsigned long)(sdmMeter.get(SdmMeter::CurrentL2) * 1000),
+         (unsigned long)(sdmMeter.get(SdmMeter::CurrentL3) * 1000));
+       _busy = true;
+-      rapiSender.sendCmd(cmd, [this](int ret) { _busy = false; });
++      rapiSender.sendCmd(cmd, [this](int ret) {
++        _busy = false;
++        if(RAPI_RESPONSE_NK == ret) {   // controller forgot the external mode: switch it on again
++          _enabled = false;
++          _tries = 0;
++          _lastAnswer = ret;
++          _state = "t0_rejected";
++        }
++      });
+ 
+       uint32_t wh = (uint32_t)(sdmMeter.get(SdmMeter::ImportEnergy) * 1000);
+       if(wh != _lastWh)
+@@ -258,6 +291,8 @@ class KinetosControllerFeed : public MicroTasks::Task
+ 
+   public:
+     bool isEnabled() { return _enabled; }
++    const char *getState() { return _state; }
++    int getLastAnswer() { return _lastAnswer; }
+ };
+ 
+ static KinetosControllerFeed controllerFeed;
+@@ -298,6 +333,9 @@ void kinetos_status(JsonDocument &doc)
+   doc["pv_share"] = kinetos_pv_share();
+   doc["powersum"] = doc["power"]; // name used by the Kinetos firmware
+   doc["controller_meter_feed"] = controllerFeed.isEnabled();
++  doc["controller_meter_feed_state"] = controllerFeed.getState();   // why the feed is off
++  doc["controller_meter_feed_answer"] = controllerFeed.getLastAnswer(); // RAPI result of $F2 0 (0 OK, 1 NK, -1 timeout)
++  doc["controller_firmware"] = evse.getFirmwareVersion();
+   doc["config_restored"] = s_configRestored;
+   doc["config_backup_bytes"] = s_backupJson.length();
+   kinetos_budget_status(doc);
+diff --git a/src/sdm_meter.cpp b/src/sdm_meter.cpp
+index a2f76ecd..016cd434 100644
+--- a/src/sdm_meter.cpp
++++ b/src/sdm_meter.cpp
+@@ -255,12 +255,12 @@ unsigned long SdmMeter::loop(MicroTasks::WakeReason reason)
+ void SdmMeter::publish()
+ {
+   StaticJsonDocument<256> event;
+-  event["amp2"] = _values[CurrentL2];
+-  event["amp3"] = _values[CurrentL3];
+-  event["voltage2"] = _values[VoltageL2];
+-  event["voltage3"] = _values[VoltageL3];
+-    event["phases"] = activePhases();
+-  event["meter_import_kwh"] = _values[ImportEnergy];
++  event["amp2"] = getRounded(CurrentL2, 2);
++  event["amp3"] = getRounded(CurrentL3, 2);
++  event["voltage2"] = getRounded(VoltageL2, 1);
++  event["voltage3"] = getRounded(VoltageL3, 1);
++  event["phases"] = activePhases();
++  event["meter_import_kwh"] = getRounded(ImportEnergy, 2);
+   event_send(event);
+   _published = millis();
+ }
+diff --git a/src/sdm_meter.h b/src/sdm_meter.h
+index 8a7d20a9..88ee4cfd 100644
+--- a/src/sdm_meter.h
++++ b/src/sdm_meter.h
+@@ -94,6 +94,11 @@ class SdmMeter : public MicroTasks::Task
+     // false once the meter has not answered for 30 s (no meter fitted); probed once a minute
+     bool isPresent() { return !_absent; }
+     float get(Value v) { return _values[v]; }
++    // For JSON: the float widened to double would show as 234.6000061, so round in double
++    double getRounded(Value v, int digits) {
++      double f = 1 == digits ? 10.0 : (2 == digits ? 100.0 : 1.0);
++      return round((double)_values[v] * f) / f;
++    }
+     // Number of phases currently carrying more than 1 A
+     uint8_t activePhases();
+ 
+diff --git a/src/web_server.cpp b/src/web_server.cpp
+index eff0308c..77027037 100644
+--- a/src/web_server.cpp
++++ b/src/web_server.cpp
+@@ -559,9 +559,9 @@ static String html_escape(const String &input) {
+ #define STATUS_JSON_EEBUS 0
+ #endif
+ #ifdef KINETOS_EXTRAS
+-// Kinetos adds about 27 members (meter incl. meter_type/meter_serial, feed, budget,
+-// sessions, LEDs, panic record)
+-#define STATUS_JSON_CAPACITY (JSON_OBJECT_SIZE(166 + STATUS_JSON_EEBUS) + 3072)
++// Kinetos adds about 30 members (meter incl. meter_type/meter_format, feed with state,
++// answer and controller firmware, budget, sessions, LEDs, panic record)
++#define STATUS_JSON_CAPACITY (JSON_OBJECT_SIZE(169 + STATUS_JSON_EEBUS) + 3072)
+ #else
+ #define STATUS_JSON_CAPACITY (JSON_OBJECT_SIZE(134 + STATUS_JSON_EEBUS) + 2048)
+ #endif

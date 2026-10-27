@@ -4,7 +4,9 @@
 #   + Modbus TCP / smart1 (PR3) + Kinetos extras (LED PV share, HA discovery, panic trap,
 #   settings migration from rev <= 8) + Kinetos page in gui-nightshift (English only)
 #   + EEBUS (openeebus by NIBE; patches-master/*-0002-eebus.patch)
-#   + meter detection SDM630/DTS4921, 8N1/8E1 (patches-master/firmware-0003-meter-detect.patch).
+#   + meter detection SDM630/DTS4921, 8N1/8E1 (patches-master/firmware-0003-meter-detect.patch)
+#   + controller meter feed retries $F2 0 until accepted, rounded meter values
+#     (patches-master/firmware-0004-feed-retry-rounding.patch, rev 21).
 #
 # Two images come out of the same sources, because OCPP and EEBUS do not both fit into
 # the 4 MB flash:
@@ -16,7 +18,7 @@
 # Needs git, node/npm, patch, python3 and PlatformIO (or uv, which fetches it).
 set -euo pipefail
 UPSTREAM="${UPSTREAM:-a3816295}"
-VERSION="${VERSION:-v5.2.0-dev-kinetos.20}"
+VERSION="${VERSION:-v5.2.0-dev-kinetos.21}"
 ENVS="${ENVS:-kinetos-v5 kinetos-eebus-v5}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 WORK="${WORK:-$HERE/.work-master}"

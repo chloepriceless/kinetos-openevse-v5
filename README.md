@@ -78,15 +78,28 @@ Bis Rev 18 las die Firmware nur die SDM630-Karte; ein DTS4921 lieferte damit Uns
    100–300 V liefert, bleibt. Ein unplausibler Wert oder eine Modbus-Fehlerantwort heißt: andere Karte.
 2. Antwortet der Zähler dreimal nicht (Timeout oder CRC-Fehler), wird die andere Parität probiert
    (8N1 ↔ 8E1). Die zuletzt funktionierende Einstellung kommt beim nächsten Mal zuerst.
-3. `/status` zeigt `meter_type` (`sdm630`, `dts4921`, `unknown`) und `meter_serial` (`8N1`, `8E1`).
-   Alle anderen Felder und Einheiten bleiben gleich.
+3. `/status` zeigt `meter_type` (`sdm630`, `dts4921`, `unknown`) und `meter_format` (`8N1`, `8E1`;
+   in Rev 20 hieß das Feld `meter_serial`). Spannungen werden auf 0,1 V, Ströme und kWh auf 0,01 gerundet
+   (ab Rev 21). Alle anderen Felder und Einheiten bleiben gleich.
 
 Die Firmware **schreibt nie** in den Zähler. Beim DTS4921 setzt ein Schreibzugriff auf 0x0020 den
 Zählerstand auf null, 0x0061–0x0063 ändern Adresse, Baudrate und Parität. Register: `docs/SPECS.md`, Kap. 5.
 
 Stand: Die SDM630-Erkennung ist der bisherige Weg. Der DTS4921-Weg ist gegen die Herstellerdoku
-geprüft (Host-Test mit deren Beispielantwort, 238,1 V), aber noch nicht an einem echten DTS4921 –
-Rückmeldungen mit `meter_type`, `meter_serial` und `meter_errors` sind willkommen.
+geprüft (Host-Test mit deren Beispielantwort, 238,1 V) und wurde mit Rev 20 an einem echten DTS4921
+erkannt (Issue #2: `dts4921`, 8N1). Rückmeldungen mit `meter_type`, `meter_format` und `meter_errors`
+sind willkommen.
+
+### Zählerwerte an den Regler (`$T0`/`$T1`)
+
+Wie die Original-Firmware schaltet die Firmware den Kinetos-Regler (Firmware 8.x) mit `$F2 0` auf externe
+Messwerte und schickt ihm dann alle 2 s die Phasenströme (`$T0 <mA L1> <mA L2> <mA L3>`) und bei jeder
+Änderung den Zählerstand (`$T1 <Wh>`) – auch ohne Ladevorgang. Bis Rev 20 gab die Firmware auf, wenn der
+Regler `$F2 0` in den ersten 6 Sekunden ablehnte (z. B. im Zustand „disabled“). Ab Rev 21 versucht sie es
+jede Minute weiter, wiederholt `$F2 0` alle 10 Minuten und nach einem abgelehnten `$T0`. `/status` zeigt
+`controller_meter_feed`, `controller_meter_feed_state` (`on`, `enabling`, `f2_rejected`, `f2_no_answer`,
+`t0_rejected`, `meter_invalid`, `controller_not_8x`), `controller_meter_feed_answer` (letzte Antwort auf
+`$F2 0`: 0 OK, 1 NK, -1 Timeout) und `controller_firmware`.
 
 ## EEBUS-Image (ab Rev 19, noch nicht auf einer Box getestet)
 
