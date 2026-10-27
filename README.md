@@ -92,7 +92,8 @@ sind willkommen.
 
 ### Zählerwerte an den Regler (`$T0`/`$T1`)
 
-Wie die Original-Firmware schaltet die Firmware den Kinetos-Regler (Firmware 8.x) mit `$F2 0` auf externe
+Wie die Original-Firmware schaltet die Firmware den Kinetos-Regler (Firmware-Hauptversion 8, gemeldet z. B. als
+`8.2.0.PR` oder `E532_L-8.2.0` – letzteres erst ab Rev 22 erkannt) mit `$F2 0` auf externe
 Messwerte und schickt ihm dann alle 2 s die Phasenströme (`$T0 <mA L1> <mA L2> <mA L3>`) und bei jeder
 Änderung den Zählerstand (`$T1 <Wh>`) – auch ohne Ladevorgang. Bis Rev 20 gab die Firmware auf, wenn der
 Regler `$F2 0` in den ersten 6 Sekunden ablehnte (z. B. im Zustand „disabled“). Ab Rev 21 versucht sie es

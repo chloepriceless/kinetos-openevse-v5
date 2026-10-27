@@ -1,0 +1,66 @@
+diff --git a/docs/developer/building.md b/docs/developer/building.md
+index 38c6e3c5..d3c0bf6a 100644
+--- a/docs/developer/building.md
++++ b/docs/developer/building.md
+@@ -231,7 +231,8 @@ If the meter does not answer three times in a row (timeout or bad CRC), the othe
+ 8N1 and 8E1 (`meter_format`). The DTS4921 ships with address 1, 9600 baud, 8E1. The last working
+ setting is tried first on the next detection. All values keep their units (V, A, W, kWh).
+ 
+-On the Kinetos controller (firmware 8.x) the meter values are also fed to the controller, as the
++On the Kinetos controller (firmware major version 8, reported as e.g. `8.2.0.PR` or
++`E532_L-8.2.0`) the meter values are also fed to the controller, as the
+ original firmware did: `$F2 0` switches it to external values, then `$T0 <mA L1> <mA L2> <mA L3>`
+ follows every 2 s and `$T1 <Wh>` whenever the import energy changes, charging or not. If the
+ controller refuses `$F2 0` (for example while it is disabled or still booting), it is retried
+diff --git a/src/kinetos/kinetos_extras.cpp b/src/kinetos/kinetos_extras.cpp
+index a6a78f1c..c25ddc0c 100644
+--- a/src/kinetos/kinetos_extras.cpp
++++ b/src/kinetos/kinetos_extras.cpp
+@@ -1,5 +1,6 @@
+ #ifdef KINETOS_EXTRAS
+ 
++#include <ctype.h>
+ #include <esp_system.h>
+ #include <EEPROM.h>
+ #include <LittleFS.h>
+@@ -186,6 +187,31 @@ static void kinetos_config_backup()
+   }
+ }
+ 
++// Major version of the EVSE controller firmware. Kinetos controllers report it in different
++// forms: "8.2.0.PR" on one box, "E532_L-8.2.0" on another (issue #2), so take the first number
++// that is directly followed by a dot instead of expecting the string to start with it.
++static int kinetos_controller_major(const char *fw)
++{
++  if(NULL == fw) {
++    return -1;
++  }
++  for(const char *p = fw; *p; p++)
++  {
++    if(!isdigit((unsigned char)*p) || (p > fw && isdigit((unsigned char)p[-1]))) {
++      continue;
++    }
++    int major = 0;
++    const char *q = p;
++    while(isdigit((unsigned char)*q) && major < 1000) {
++      major = major * 10 + (*q++ - '0');
++    }
++    if('.' == *q) {
++      return major;
++    }
++  }
++  return -1;
++}
++
+ class KinetosControllerFeed : public MicroTasks::Task
+ {
+   private:
+@@ -239,7 +265,7 @@ class KinetosControllerFeed : public MicroTasks::Task
+           config_user_commit();
+         }
+       }
+-      if(0 != strncmp(evse.getFirmwareVersion(), "8.", 2)) {
++      if(8 != kinetos_controller_major(evse.getFirmwareVersion())) {
+         _state = "controller_not_8x";
+         return 10 * 1000; // only the Kinetos controller knows these commands
+       }
