@@ -102,6 +102,21 @@ jede Minute weiter, wiederholt `$F2 0` alle 10 Minuten und nach einem abgelehnte
 `t0_rejected`, `meter_invalid`, `controller_not_8x`), `controller_meter_feed_answer` (letzte Antwort auf
 `$F2 0`: 0 OK, 1 NK, -1 Timeout) und `controller_firmware`.
 
+### Verbindung zum Regler beobachten (ab Rev 23)
+
+Bei manchen Boxen antwortet der Regler am Ladeende nicht mehr (Issue #7): `/status` bleibt dann auf dem
+letzten Zustand stehen, z. B. „lädt, Auto steckt“, obwohl das Auto längst abgesteckt ist. Ab Rev 23 zeigt
+`/status` das an – die Firmware schickt dafür nichts zusätzlich an den Regler:
+
+- `rapi_last_ok_s`: Sekunden seit der letzten `$OK`-Antwort des Reglers.
+- `rapi_connected`: geht nach 30 s ohne `$OK` auf 0 (vorher blieb es auf 1, auch wenn nichts mehr kam).
+- `rapi_silences`, `rapi_silence_max_s`: wie oft der Regler seit dem Start 10 s oder länger still war, und die längste Pause.
+- `rapi_silence`: die laufende oder letzte Pause – `start` (Laufzeit `up` in s, Uhrzeit `time`, Reglerzustand
+  `state`, `vehicle`, höchster Phasenstrom `amp` vom Zähler), `line_before` (letzte Zeile davor), `sent`
+  (Befehle während der Pause), `new_lines` (0 = vom Regler kam gar nichts Neues) und `last_line`.
+- `evse_state_history`: die letzten 8 Zustandswechsel des Reglers mit denselben Feldern.
+- `rapi_last_line`: die zuletzt empfangene Zeile vom Regler.
+
 ## EEBUS-Image (ab Rev 19, noch nicht auf einer Box getestet)
 
 `build-master.sh` baut zwei Images aus denselben Quellen, weil OCPP und EEBUS nicht zusammen in die 4 MB passen:

@@ -1,0 +1,330 @@
+diff --git a/src/kinetos/kinetos_extras.cpp b/src/kinetos/kinetos_extras.cpp
+index c25ddc0c..52fa918c 100644
+--- a/src/kinetos/kinetos_extras.cpp
++++ b/src/kinetos/kinetos_extras.cpp
+@@ -13,6 +13,7 @@
+ #include "kinetos_budget.h"
+ #include "kinetos_features.h"
+ #include "kinetos_wled.h"
++#include "kinetos_rapiwatch.h"
+ #include "sdm_meter.h"
+ #include "input.h"
+ #include "evse_man.h"
+@@ -326,6 +327,7 @@ static KinetosControllerFeed controllerFeed;
+ void kinetos_begin()
+ {
+   MicroTask.startTask(controllerFeed);
++  kinetos_rapiwatch_begin();
+   kinetos_features_begin();
+ 
+   // A panic record is only meaningful right after the panic reboot
+diff --git a/src/kinetos/kinetos_rapiwatch.cpp b/src/kinetos/kinetos_rapiwatch.cpp
+new file mode 100644
+index 00000000..bff39d63
+--- /dev/null
++++ b/src/kinetos/kinetos_rapiwatch.cpp
+@@ -0,0 +1,249 @@
++// Diagnostics for the RAPI link to the EVSE controller (issue #7).
++//
++// On some Kinetos boxes the controller stops answering at the end of a charge: the ESP keeps
++// sending, almost nothing comes back as $OK, and /status freezes on the last controller state
++// (still "charging", vehicle still connected long after it was unplugged). The upstream
++// rapi_connected flag does not show it, because RapiSender::loop() completes a timed-out
++// command without clearing _connected.
++//
++// This task only watches and reports, it sends nothing to the controller:
++//  - seconds since the last $OK, rapi_connected cleared after 30 s without one
++//  - every silence (no $OK for 10 s or more): when it began, the controller state and the
++//    meter current 10 s later, and whether the controller still sent other lines (busy or
++//    garbled answers) or nothing new at all (hung). A repeated identical line counts once.
++//  - the last controller state changes, to see what happened right before a silence
++#ifdef KINETOS_EXTRAS
++
++#if defined(ENABLE_DEBUG) && !defined(ENABLE_DEBUG_KINETOS)
++#undef ENABLE_DEBUG
++#endif
++
++#include <Arduino.h>
++#include <ArduinoJson.h>
++#include <MicroTasks.h>
++#include <time.h>
++
++#include "kinetos_rapiwatch.h"
++#include "input.h"
++#include "evse_man.h"
++#include "sdm_meter.h"
++#include "debug.h"
++
++#define RAPIWATCH_SILENCE_MS   (10UL * 1000UL)
++#define RAPIWATCH_CONNECTED_MS (30UL * 1000UL)
++#define RAPIWATCH_HISTORY      8
++#define RAPIWATCH_RESP_LEN     40
++
++struct RapiWatchSnapshot
++{
++  uint32_t upS = 0;        // ESP uptime in seconds
++  uint32_t epoch = 0;      // wall clock, 0 if not synced
++  uint8_t state = 0;       // controller state as last seen by the ESP
++  uint8_t vehicle = 0;
++  float amps = -1;         // highest phase current from the meter, -1 without meter
++};
++
++static void rapiwatch_snapshot(RapiWatchSnapshot &s, uint32_t ms)
++{
++  s.upS = ms / 1000UL;
++  time_t now = time(nullptr);
++  s.epoch = now > 1600000000 ? (uint32_t)now : 0;
++  s.state = evse.getEvseState();
++  s.vehicle = evse.isVehicleConnected() ? 1 : 0;
++  if(sdmMeter.isValid())
++  {
++    float a = sdmMeter.get(SdmMeter::CurrentL1);
++    if(sdmMeter.get(SdmMeter::CurrentL2) > a) a = sdmMeter.get(SdmMeter::CurrentL2);
++    if(sdmMeter.get(SdmMeter::CurrentL3) > a) a = sdmMeter.get(SdmMeter::CurrentL3);
++    s.amps = roundf(a * 100) / 100;
++  } else {
++    s.amps = -1;
++  }
++}
++
++static void rapiwatch_snapshot_json(JsonObject o, const RapiWatchSnapshot &s)
++{
++  o["up"] = s.upS;
++  if(s.epoch) {
++    o["time"] = s.epoch;
++  }
++  o["state"] = s.state;
++  o["vehicle"] = s.vehicle;
++  if(s.amps >= 0) {
++    o["amp"] = s.amps;
++  }
++}
++
++// Printable copy of a raw RAPI line ('?' for anything else), so it is safe in JSON
++static void rapiwatch_copy_line(char *dst, const char *src)
++{
++  size_t i = 0;
++  for(; src && src[i] && i < RAPIWATCH_RESP_LEN - 1; i++) {
++    unsigned char c = (unsigned char)src[i];
++    dst[i] = (c >= 0x20 && c < 0x7f) ? (char)c : '?';
++  }
++  dst[i] = '\0';
++}
++
++class KinetosRapiWatch : public MicroTasks::Task
++{
++  private:
++    uint32_t _lastSuccess = 0;
++    uint32_t _lastOkMs = 0;
++    char _lastLine[RAPIWATCH_RESP_LEN] = "";
++
++    bool _silent = false;
++    uint32_t _silenceStartMs = 0;
++    uint32_t _silences = 0;
++    uint32_t _silenceMaxS = 0;
++    uint32_t _silenceLastS = 0;     // length of the last finished silence
++    uint32_t _silenceSent = 0;      // commands sent when the current/last silence began
++    uint32_t _silenceSentEnd = 0;   // ... and when it ended
++    uint32_t _silenceLines = 0;     // times a different line arrived during it
++    RapiWatchSnapshot _silenceStart;
++    char _silenceLine[RAPIWATCH_RESP_LEN] = "";  // last line before it
++    char _silenceLastLine[RAPIWATCH_RESP_LEN] = ""; // last line seen during it
++
++    RapiWatchSnapshot _history[RAPIWATCH_HISTORY];
++    uint8_t _historyCount = 0;
++    uint8_t _historyNext = 0;
++    uint8_t _lastState = 0xff;
++    uint8_t _lastVehicle = 0xff;
++
++    void addHistory(uint32_t ms)
++    {
++      rapiwatch_snapshot(_history[_historyNext], ms);
++      _historyNext = (_historyNext + 1) % RAPIWATCH_HISTORY;
++      if(_historyCount < RAPIWATCH_HISTORY) {
++        _historyCount++;
++      }
++    }
++
++  protected:
++    void setup()
++    {
++      _lastOkMs = millis();
++      _lastSuccess = rapiSender.getSuccess();
++    }
++
++    unsigned long loop(MicroTasks::WakeReason reason)
++    {
++      uint32_t ms = millis();
++
++      // A new raw line from the controller (any answer or async message)
++      const char *line = rapiSender.getResponse();
++      bool newLine = (line && 0 != strncmp(line, _lastLine, RAPIWATCH_RESP_LEN - 1));
++      if(newLine) {
++        rapiwatch_copy_line(_lastLine, line);
++      }
++
++      uint32_t success = rapiSender.getSuccess();
++      if(success != _lastSuccess)
++      {
++        _lastSuccess = success;
++        _lastOkMs = ms;
++        if(_silent)
++        {
++          _silent = false;
++          _silenceLastS = (ms - _silenceStartMs) / 1000UL;
++          if(_silenceLastS > _silenceMaxS) {
++            _silenceMaxS = _silenceLastS;
++          }
++          _silenceSentEnd = rapiSender.getSent();
++          DBUGF("kinetos: RAPI answers again after %lu s", (unsigned long)_silenceLastS);
++        }
++      }
++      else if(!_silent && ms - _lastOkMs >= RAPIWATCH_SILENCE_MS)
++      {
++        _silent = true;
++        _silences++;
++        _silenceStartMs = _lastOkMs;
++        rapiwatch_snapshot(_silenceStart, _lastOkMs);
++        // state/vehicle/meter are from now, the start time is that of the last $OK
++        RapiWatchSnapshot now;
++        rapiwatch_snapshot(now, ms);
++        _silenceStart.state = now.state;
++        _silenceStart.vehicle = now.vehicle;
++        _silenceStart.amps = now.amps;
++        if(_silenceStart.epoch) {
++          _silenceStart.epoch -= (ms - _lastOkMs) / 1000UL;
++        }
++        _silenceSent = rapiSender.getSent();
++        _silenceSentEnd = 0;
++        _silenceLines = 0;
++        strncpy(_silenceLine, _lastLine, sizeof(_silenceLine));
++        _silenceLastLine[0] = '\0';
++        DBUGF("kinetos: no RAPI $OK for %lu s", (unsigned long)((ms - _lastOkMs) / 1000UL));
++      }
++      else if(_silent && newLine)
++      {
++        _silenceLines++;
++        strncpy(_silenceLastLine, _lastLine, sizeof(_silenceLastLine));
++      }
++
++      if(_silent)
++      {
++        uint32_t len = (ms - _lastOkMs) / 1000UL;
++        if(len > _silenceMaxS) {
++          _silenceMaxS = len;
++        }
++      }
++
++      // Controller state changes as the ESP sees them
++      uint8_t state = evse.getEvseState();
++      uint8_t vehicle = evse.isVehicleConnected() ? 1 : 0;
++      if(state != _lastState || vehicle != _lastVehicle)
++      {
++        _lastState = state;
++        _lastVehicle = vehicle;
++        addHistory(ms);
++      }
++      return 1000;
++    }
++
++  public:
++    // Called from buildStatus() only (not from create_rapi_json(), which also feeds MQTT)
++    void status(JsonDocument &doc)
++    {
++      uint32_t ms = millis();
++      uint32_t age = (ms - _lastOkMs) / 1000UL;
++      doc["rapi_last_ok_s"] = age;
++      // upstream keeps this at 1 while every command times out
++      doc["rapi_connected"] = (ms - _lastOkMs) < RAPIWATCH_CONNECTED_MS ? 1 : 0;
++      doc["rapi_last_line"] = _lastLine;
++      doc["rapi_silences"] = _silences;
++      doc["rapi_silence_max_s"] = _silenceMaxS;
++      if(_silences > 0)
++      {
++        JsonObject s = doc.createNestedObject("rapi_silence");
++        s["active"] = _silent;
++        s["length_s"] = _silent ? age : _silenceLastS;
++        JsonObject start = s.createNestedObject("start");
++        rapiwatch_snapshot_json(start, _silenceStart);
++        s["line_before"] = _silenceLine;
++        s["sent"] = (_silent ? rapiSender.getSent() : _silenceSentEnd) - _silenceSent;
++        s["new_lines"] = _silenceLines;           // 0 = nothing new from the controller
++        s["last_line"] = _silenceLastLine;
++      }
++      JsonArray h = doc.createNestedArray("evse_state_history");
++      for(uint8_t i = 0; i < _historyCount; i++)
++      {
++        uint8_t idx = (_historyNext + RAPIWATCH_HISTORY - _historyCount + i) % RAPIWATCH_HISTORY;
++        rapiwatch_snapshot_json(h.createNestedObject(), _history[idx]);
++      }
++    }
++};
++
++static KinetosRapiWatch rapiWatch;
++
++void kinetos_rapiwatch_begin()
++{
++  MicroTask.startTask(rapiWatch);
++}
++
++void kinetos_rapiwatch_status(JsonDocument &doc)
++{
++  rapiWatch.status(doc);
++}
++
++#endif // KINETOS_EXTRAS
+diff --git a/src/kinetos/kinetos_rapiwatch.h b/src/kinetos/kinetos_rapiwatch.h
+new file mode 100644
+index 00000000..7f5bb281
+--- /dev/null
++++ b/src/kinetos/kinetos_rapiwatch.h
+@@ -0,0 +1,14 @@
++// Watches the RAPI link to the EVSE controller (see kinetos_rapiwatch.cpp)
++#ifndef KINETOS_RAPIWATCH_H
++#define KINETOS_RAPIWATCH_H
++
++#ifdef KINETOS_EXTRAS
++
++#include <Arduino.h>
++#include <ArduinoJson.h>
++
++void kinetos_rapiwatch_begin();
++void kinetos_rapiwatch_status(JsonDocument &doc);
++
++#endif // KINETOS_EXTRAS
++#endif // KINETOS_RAPIWATCH_H
+diff --git a/src/web_server.cpp b/src/web_server.cpp
+index 77027037..0dec56f7 100644
+--- a/src/web_server.cpp
++++ b/src/web_server.cpp
+@@ -58,6 +58,7 @@ typedef const __FlashStringHelper *fstr_t;
+ #ifdef KINETOS_EXTRAS
+ #include "kinetos/kinetos_features.h"
+ #include "kinetos/kinetos_wled.h"
++#include "kinetos/kinetos_rapiwatch.h"
+ #endif
+ #include "web_auth.h"
+ #include "web_auth_secret.h"
+@@ -560,8 +561,10 @@ static String html_escape(const String &input) {
+ #endif
+ #ifdef KINETOS_EXTRAS
+ // Kinetos adds about 30 members (meter incl. meter_type/meter_format, feed with state,
+-// answer and controller firmware, budget, sessions, LEDs, panic record)
+-#define STATUS_JSON_CAPACITY (JSON_OBJECT_SIZE(169 + STATUS_JSON_EEBUS) + 3072)
++// answer and controller firmware, budget, sessions, LEDs, panic record) and the RAPI watch
++// (5 members, rapi_silence with start: 12, evse_state_history: 8 objects of 5 = 48 slots)
++#define STATUS_JSON_RAPIWATCH (JSON_OBJECT_SIZE(17) + JSON_ARRAY_SIZE(8) + 8 * JSON_OBJECT_SIZE(5))
++#define STATUS_JSON_CAPACITY (JSON_OBJECT_SIZE(169 + STATUS_JSON_EEBUS) + STATUS_JSON_RAPIWATCH + 3072)
+ #else
+ #define STATUS_JSON_CAPACITY (JSON_OBJECT_SIZE(134 + STATUS_JSON_EEBUS) + 2048)
+ #endif
+@@ -675,6 +678,9 @@ void buildStatus(DynamicJsonDocument &doc) {
+   doc["evse_connected"] = (int)evse.isConnected();
+ 
+   create_rapi_json(doc);
++#ifdef KINETOS_EXTRAS
++  kinetos_rapiwatch_status(doc);   // also corrects rapi_connected set above (issue #7)
++#endif
+ 
+   doc["gfcicount"] = evse.getFaultCountGFCI();
+   doc["nogndcount"] = evse.getFaultCountNoGround();
