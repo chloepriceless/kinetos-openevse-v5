@@ -1,0 +1,385 @@
+diff --git a/src/kinetos/kinetos_extras.cpp b/src/kinetos/kinetos_extras.cpp
+index 52fa918c..e0cf4556 100644
+--- a/src/kinetos/kinetos_extras.cpp
++++ b/src/kinetos/kinetos_extras.cpp
+@@ -26,6 +26,7 @@ bool kinetos_led_pv_enabled;
+ uint8_t kinetos_led_fx_charge;
+ bool kinetos_ha_enabled;
+ String kinetos_lcd_splash;
++bool kinetos_lcd_controller;   // test switch for issue #7: display left to the controller
+ bool kinetos_lightshow_enabled;
+ uint8_t kinetos_config_ver;
+ uint8_t kinetos_legacy_p14a_pin;
+diff --git a/src/kinetos/kinetos_extras.h b/src/kinetos/kinetos_extras.h
+index 12f0c516..83e35c49 100644
+--- a/src/kinetos/kinetos_extras.h
++++ b/src/kinetos/kinetos_extras.h
+@@ -13,6 +13,7 @@ extern bool kinetos_led_pv_enabled;
+ extern uint8_t kinetos_led_fx_charge;
+ extern bool kinetos_ha_enabled;
+ extern String kinetos_lcd_splash;
++extern bool kinetos_lcd_controller;
+ extern bool kinetos_lightshow_enabled;
+ extern String kinetos_mqtt_ls_budget;
+ extern uint8_t kinetos_max_current_1p;
+@@ -31,6 +32,7 @@ extern String kinetos_legacy_evse_id;
+   new ConfigOptDefinition<uint8_t>(kinetos_led_fx_charge, 3, "led_fx_charge", "lfx"), \
+   new ConfigOptDefinition<bool>(kinetos_ha_enabled, true, "ha_discovery_enabled", "had"), \
+   new ConfigOptDefinition<String>(kinetos_lcd_splash, "Kinetos ETH/WiFi", "lcd_splash", "lsp"), \
++  new ConfigOptDefinition<bool>(kinetos_lcd_controller, false, "lcd_controller", "lcc"), \
+   new ConfigOptDefinition<bool>(kinetos_lightshow_enabled, false, "lightshow_enabled", "lsh"), \
+   new ConfigOptDefinition<String>(kinetos_mqtt_ls_budget, "", "mqtt_ls_budget", "mlb"), \
+   new ConfigOptDefinition<uint8_t>(kinetos_max_current_1p, 0, "max_current_1p", "m1p"), \
+diff --git a/src/kinetos/kinetos_rapiwatch.cpp b/src/kinetos/kinetos_rapiwatch.cpp
+index bff39d63..618d1559 100644
+--- a/src/kinetos/kinetos_rapiwatch.cpp
++++ b/src/kinetos/kinetos_rapiwatch.cpp
+@@ -12,6 +12,9 @@
+ //    meter current 10 s later, and whether the controller still sent other lines (busy or
+ //    garbled answers) or nothing new at all (hung). A repeated identical line counts once.
+ //  - the last controller state changes, to see what happened right before a silence
++//  - a trace of the last RAPI lines in both directions (rev 24). When a silence begins it is
++//    written to LittleFS, so it survives the power cycle that is needed to free a hung
++//    controller. GET /kinetos/rapitrace shows the saved trace and the live one.
+ #ifdef KINETOS_EXTRAS
+ 
+ #if defined(ENABLE_DEBUG) && !defined(ENABLE_DEBUG_KINETOS)
+@@ -22,18 +25,25 @@
+ #include <ArduinoJson.h>
+ #include <MicroTasks.h>
+ #include <time.h>
++#include <LittleFS.h>
+ 
+ #include "kinetos_rapiwatch.h"
+ #include "input.h"
+ #include "evse_man.h"
+ #include "sdm_meter.h"
+ #include "debug.h"
++#include "emonesp.h"
+ 
+ #define RAPIWATCH_SILENCE_MS   (10UL * 1000UL)
+ #define RAPIWATCH_CONNECTED_MS (30UL * 1000UL)
+ #define RAPIWATCH_HISTORY      8
+ #define RAPIWATCH_RESP_LEN     40
+ 
++#define RAPITRACE_LINES        96   // about 20 s of normal traffic
++#define RAPITRACE_TEXT         40
++#define RAPITRACE_FILE         "/kinetos/rapitrace.txt"
++#define RAPITRACE_SAVE_GAP_MS  (10UL * 60UL * 1000UL)  // at most one save per 10 minutes
++
+ struct RapiWatchSnapshot
+ {
+   uint32_t upS = 0;        // ESP uptime in seconds
+@@ -85,6 +95,168 @@ static void rapiwatch_copy_line(char *dst, const char *src)
+   dst[i] = '\0';
+ }
+ 
++// ---- RAPI trace -------------------------------------------------------------------------
++
++struct RapiTraceLine
++{
++  uint32_t ms;
++  char dir;                     // '>' to the controller, '<' from it
++  char text[RAPITRACE_TEXT];    // printable, anything else as \xHH, '~' at the end if cut
++};
++
++struct RapiTraceLineBuf
++{
++  char text[RAPITRACE_TEXT];
++  uint8_t len = 0;
++  bool cut = false;
++};
++
++static RapiTraceLine s_trace[RAPITRACE_LINES];
++static uint8_t s_traceNext = 0;
++static uint8_t s_traceCount = 0;
++static RapiTraceLineBuf s_traceOut;
++static RapiTraceLineBuf s_traceIn;
++static bool s_traceSaved = false;        // a saved trace exists in LittleFS
++static bool s_traceSaveDone = false;     // saved since boot
++static uint32_t s_traceSaveMs = 0;
++static uint32_t s_traceLastOkMs = 0;     // when the last line starting with $OK came in
++
++static void rapitrace_push(char dir, RapiTraceLineBuf &b)
++{
++  RapiTraceLine &l = s_trace[s_traceNext];
++  l.ms = millis();
++  l.dir = dir;
++  memcpy(l.text, b.text, b.len);
++  l.text[b.len] = '\0';
++  if(b.cut && b.len > 0) {
++    l.text[b.len - 1] = '~';
++  }
++  if('<' == dir && 0 == strncmp(l.text, "$OK", 3)) {
++    s_traceLastOkMs = l.ms;
++  }
++  s_traceNext = (s_traceNext + 1) % RAPITRACE_LINES;
++  if(s_traceCount < RAPITRACE_LINES) {
++    s_traceCount++;
++  }
++  b.len = 0;
++  b.cut = false;
++}
++
++static void rapitrace_add(RapiTraceLineBuf &b, uint8_t c)
++{
++  char esc[5];
++  size_t n = 1;
++  if(c >= 0x20 && c < 0x7f) {
++    esc[0] = (char)c;
++  } else {
++    n = snprintf(esc, sizeof(esc), "\\x%02X", c);
++  }
++  if(b.len + n < RAPITRACE_TEXT) {
++    memcpy(b.text + b.len, esc, n);
++    b.len += n;
++  } else {
++    b.cut = true;
++  }
++}
++
++void kinetos_rapiwatch_tap(bool write, const uint8_t *buffer, size_t size)
++{
++  RapiTraceLineBuf &b = write ? s_traceOut : s_traceIn;
++  for(size_t i = 0; i < size; i++)
++  {
++    uint8_t c = buffer[i];
++    if('\r' == c) {
++      rapitrace_push(write ? '>' : '<', b);
++    } else if('\n' == c && 0 == b.len) {
++      continue;
++    } else {
++      rapitrace_add(b, c);
++    }
++  }
++}
++
++// Lines oldest first, times in seconds relative to refMs
++static void rapitrace_print_lines(Print &out, uint32_t refMs)
++{
++  for(uint8_t i = 0; i < s_traceCount; i++)
++  {
++    const RapiTraceLine &l = s_trace[(s_traceNext + RAPITRACE_LINES - s_traceCount + i) % RAPITRACE_LINES];
++    int32_t d = (int32_t)(l.ms - refMs);
++    out.printf("%+9.3f %c %s\n", d / 1000.0, l.dir, l.text);
++  }
++  if(s_traceOut.len) {
++    out.printf("  unfinished > %.*s\n", s_traceOut.len, s_traceOut.text);
++  }
++  if(s_traceIn.len) {
++    out.printf("  unfinished < %.*s\n", s_traceIn.len, s_traceIn.text);
++  }
++}
++
++static void rapitrace_save(uint32_t lastOkMs, uint32_t silences, const RapiWatchSnapshot &start)
++{
++  uint32_t ms = millis();
++  if(s_traceSaveDone && ms - s_traceSaveMs < RAPITRACE_SAVE_GAP_MS) {
++    return;
++  }
++  s_traceSaveDone = true;
++  s_traceSaveMs = ms;
++
++  if(!LittleFS.exists("/kinetos")) {
++    LittleFS.mkdir("/kinetos");
++  }
++  File f = LittleFS.open(RAPITRACE_FILE ".tmp", "w");
++  if(!f) {
++    DBUGLN("kinetos: could not save the RAPI trace");
++    return;
++  }
++  f.printf("Kinetos RAPI trace, firmware %s\n", currentfirmware.c_str());
++  f.printf("silence %lu: no $OK since uptime %lu s", (unsigned long)silences, (unsigned long)start.upS);
++  if(start.epoch) {
++    time_t t = start.epoch;
++    struct tm tm;
++    gmtime_r(&t, &tm);
++    char when[24];
++    strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%S", &tm);
++    f.printf(" (%s UTC)", when);
++  }
++  f.printf(", state %u, vehicle %u", start.state, start.vehicle);
++  if(start.amps >= 0) {
++    f.printf(", %.2f A", start.amps);
++  }
++  f.printf("\ntimes in s relative to the last $OK, > to the controller, < from it\n");
++  // the watch task sees a new $OK up to 1 s late, the trace knows the exact time
++  rapitrace_print_lines(f, (s_traceLastOkMs && lastOkMs - s_traceLastOkMs < 2000UL) ? s_traceLastOkMs : lastOkMs);
++  f.close();
++  LittleFS.remove(RAPITRACE_FILE);
++  LittleFS.rename(RAPITRACE_FILE ".tmp", RAPITRACE_FILE);
++  s_traceSaved = true;
++  DBUGLN("kinetos: RAPI trace saved");
++}
++
++void kinetos_rapiwatch_print(Print &out)
++{
++  File f;
++  if(s_traceSaved) {
++    f = LittleFS.open(RAPITRACE_FILE, "r");
++  }
++  if(f)
++  {
++    out.print("=== saved when the last silence began (survives a restart) ===\n");
++    uint8_t buf[128];
++    size_t n;
++    while((n = f.read(buf, sizeof(buf))) > 0) {
++      out.write(buf, n);
++    }
++    f.close();
++  } else {
++    out.print("=== no silence saved yet ===\n");
++  }
++  out.printf("\n=== live, uptime %lu s, times in s relative to now ===\n", (unsigned long)(millis() / 1000UL));
++  rapitrace_print_lines(out, millis());
++}
++
++// ---- watch task --------------------------------------------------------------------------
++
+ class KinetosRapiWatch : public MicroTasks::Task
+ {
+   private:
+@@ -124,6 +296,7 @@ class KinetosRapiWatch : public MicroTasks::Task
+     {
+       _lastOkMs = millis();
+       _lastSuccess = rapiSender.getSuccess();
++      s_traceSaved = LittleFS.exists(RAPITRACE_FILE);
+     }
+ 
+     unsigned long loop(MicroTasks::WakeReason reason)
+@@ -173,6 +346,7 @@ class KinetosRapiWatch : public MicroTasks::Task
+         _silenceLines = 0;
+         strncpy(_silenceLine, _lastLine, sizeof(_silenceLine));
+         _silenceLastLine[0] = '\0';
++        rapitrace_save(_lastOkMs, _silences, _silenceStart);
+         DBUGF("kinetos: no RAPI $OK for %lu s", (unsigned long)((ms - _lastOkMs) / 1000UL));
+       }
+       else if(_silent && newLine)
+@@ -213,6 +387,7 @@ class KinetosRapiWatch : public MicroTasks::Task
+       doc["rapi_last_line"] = _lastLine;
+       doc["rapi_silences"] = _silences;
+       doc["rapi_silence_max_s"] = _silenceMaxS;
++      doc["rapi_trace_saved"] = s_traceSaved ? 1 : 0;   // see /kinetos/rapitrace
+       if(_silences > 0)
+       {
+         JsonObject s = doc.createNestedObject("rapi_silence");
+diff --git a/src/kinetos/kinetos_rapiwatch.h b/src/kinetos/kinetos_rapiwatch.h
+index 7f5bb281..dc8c57b7 100644
+--- a/src/kinetos/kinetos_rapiwatch.h
++++ b/src/kinetos/kinetos_rapiwatch.h
+@@ -10,5 +10,11 @@
+ void kinetos_rapiwatch_begin();
+ void kinetos_rapiwatch_status(JsonDocument &doc);
+ 
++// Every byte to and from the controller (hooked into the SerialEvse spy in web_server.cpp)
++void kinetos_rapiwatch_tap(bool write, const uint8_t *buffer, size_t size);
++
++// Text for /kinetos/rapitrace: the trace saved at the last silence and the live one
++void kinetos_rapiwatch_print(Print &out);
++
+ #endif // KINETOS_EXTRAS
+ #endif // KINETOS_RAPIWATCH_H
+diff --git a/src/lcd.cpp b/src/lcd.cpp
+index 7486fc93..63723076 100644
+--- a/src/lcd.cpp
++++ b/src/lcd.cpp
+@@ -16,6 +16,7 @@
+ #ifdef KINETOS_EXTRAS
+ #include "sdm_meter.h"
+ #include "rfid.h"
++#include "kinetos/kinetos_extras.h"
+ #endif
+ 
+ static void IGNORE(int ret) {
+@@ -107,6 +108,9 @@ void LcdTask::display(const char *msg, int x, int y, int time, uint32_t flags)
+ 
+ void LcdTask::setEvseState(uint8_t lcdColour)
+ {
++#ifdef KINETOS_EXTRAS
++  if(!kinetos_lcd_controller)
++#endif
+   _evse->getOpenEVSE().lcdSetColour(lcdColour, IGNORE);
+   setInfoLine(getNextInfoLine(LcdInfoLine::Off));
+ }
+@@ -182,7 +186,13 @@ unsigned long LcdTask::loop(MicroTasks::WakeReason reason)
+       if(!_evse->isButtonDisabled()) {
+         _evse->getOpenEVSE().feature(OPENEVSE_FEATURE_BUTTON, false, IGNORE);
+       }
++#ifdef KINETOS_EXTRAS
++      // Test switch "lcd_controller" (issue #7): the controller keeps drawing its own display
++      // and the ESP sends no display commands at all
++      _evse->getOpenEVSE().lcdEnable(kinetos_lcd_controller, IGNORE);
++#else
+       _evse->getOpenEVSE().lcdEnable(false, IGNORE);
++#endif
+       _evse->getOpenEVSE().onButton([this](uint8_t long_press) { onButton(long_press); });
+     }
+ 
+@@ -255,6 +265,9 @@ unsigned long LcdTask::loop(MicroTasks::WakeReason reason)
+   {
+     // Set the LCD background colour based on the EVSE state and deal with any
+     // resulting state changes
++#ifdef KINETOS_EXTRAS
++    if(!kinetos_lcd_controller)
++#endif
+     _evse->getOpenEVSE().lcdSetColour(_evse->getStateColour(), IGNORE);
+     if(evseStateChanged) {
+       setInfoLine(getNextInfoLine(LcdInfoLine::Off));
+@@ -948,6 +961,11 @@ void LcdTask::displayNameValue(int line, const char *name, const char *value)
+ void LcdTask::showText(int x, int y, const char *msg, bool clear)
+ {
+   DBUGF("LCD: %d %d %s, clear=%s", x, y, msg, clear ? "true" : "false");
++#ifdef KINETOS_EXTRAS
++  if(kinetos_lcd_controller) {
++    return;
++  }
++#endif
+   _evse->getOpenEVSE().lcdDisplayText(x, y, msg, IGNORE);
+   if(clear)
+   {
+diff --git a/src/web_server.cpp b/src/web_server.cpp
+index 0dec56f7..f7901694 100644
+--- a/src/web_server.cpp
++++ b/src/web_server.cpp
+@@ -563,7 +563,7 @@ static String html_escape(const String &input) {
+ // Kinetos adds about 30 members (meter incl. meter_type/meter_format, feed with state,
+ // answer and controller firmware, budget, sessions, LEDs, panic record) and the RAPI watch
+ // (5 members, rapi_silence with start: 12, evse_state_history: 8 objects of 5 = 48 slots)
+-#define STATUS_JSON_RAPIWATCH (JSON_OBJECT_SIZE(17) + JSON_ARRAY_SIZE(8) + 8 * JSON_OBJECT_SIZE(5))
++#define STATUS_JSON_RAPIWATCH (JSON_OBJECT_SIZE(18) + JSON_ARRAY_SIZE(8) + 8 * JSON_OBJECT_SIZE(5))
+ #define STATUS_JSON_CAPACITY (JSON_OBJECT_SIZE(169 + STATUS_JSON_EEBUS) + STATUS_JSON_RAPIWATCH + 3072)
+ #else
+ #define STATUS_JSON_CAPACITY (JSON_OBJECT_SIZE(134 + STATUS_JSON_EEBUS) + 2048)
+@@ -2492,12 +2492,32 @@ void web_server_setup()
+   });
+ 
+   SerialEvse.onWrite([](const uint8_t *buffer, size_t size) {
++#ifdef KINETOS_EXTRAS
++    kinetos_rapiwatch_tap(true, buffer, size);
++#endif
+     web_server_send_ascii_utf8("/evse/console", buffer, size);
+   });
+   SerialEvse.onRead([](const uint8_t *buffer, size_t size) {
++#ifdef KINETOS_EXTRAS
++    kinetos_rapiwatch_tap(false, buffer, size);
++#endif
+     web_server_send_ascii_utf8("/evse/console", buffer, size);
+   });
+ 
++#ifdef KINETOS_EXTRAS
++  // RAPI trace saved when the controller stopped answering, and the live one (issue #7)
++  server.on("/kinetos/rapitrace$", [](MongooseHttpServerRequest *request) {
++    MongooseHttpServerResponseStream *response;
++    if(false == requestPreProcess(request, response, CONTENT_TYPE_TEXT)) {
++      return;
++    }
++    response->setCode(200);
++    response->setContentType(CONTENT_TYPE_TEXT);
++    kinetos_rapiwatch_print(*response);
++    request->send(response);
++  });
++#endif
++
+   server.on("/ws$")->
+     onRequest(onWsAuthenticate)
+     ->

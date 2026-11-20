@@ -117,6 +117,19 @@ letzten Zustand stehen, z. B. „lädt, Auto steckt“, obwohl das Auto längst 
 - `evse_state_history`: die letzten 8 Zustandswechsel des Reglers mit denselben Feldern.
 - `rapi_last_line`: die zuletzt empfangene Zeile vom Regler.
 
+### Mitschnitt und Display-Testschalter (ab Rev 24)
+
+- **Mitschnitt:** Die Firmware merkt sich die letzten 96 RAPI-Zeilen in beide Richtungen (etwa 20 s). Sobald der
+  Regler 10 s lang kein `$OK` schickt, speichert sie diese Zeilen im Flash (höchstens einmal in 10 Minuten). Der
+  Mitschnitt übersteht also auch das Aus- und Einschalten, das einen hängenden Regler wieder freimacht.
+  Abrufen: `http://<box>/kinetos/rapitrace` (gespeicherter Mitschnitt und der laufende). `/status` zeigt mit
+  `rapi_trace_saved: 1`, dass einer gespeichert ist. Zeiten stehen in Sekunden relativ zum letzten `$OK`,
+  `>` = an den Regler, `<` = vom Regler, nicht druckbare Zeichen als `\xHH`.
+- **Testschalter `lcd_controller`:** Ist er an, schickt der ESP keine Display-Befehle (`$FP`, `$FB`) mehr und
+  überlässt das Display dem Regler (`$F0 1`). Er wirkt erst nach einem Neustart.
+  Einschalten: `curl -X POST -H 'Content-Type: application/json' -d '{"lcd_controller":true}' http://<box>/config`,
+  dann die Box neu starten. Ausschalten mit `false`.
+
 ## EEBUS-Image (ab Rev 19, noch nicht auf einer Box getestet)
 
 `build-master.sh` baut zwei Images aus denselben Quellen, weil OCPP und EEBUS nicht zusammen in die 4 MB passen:
